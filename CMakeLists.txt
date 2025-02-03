@@ -681,11 +681,12 @@ ADD_LIBRARY(libDaScript ${PARSER_GENERATED_SRC} ${PARSER_SRC} ${VECMATH_SRC} ${A
     ${MISC_SRC} ${SIMULATE_SRC} ${SIMULATE_FUSION_SRC} ${TEST_SRC} ${MAIN_SRC}
 	${DAGOR_NOISE_SRC} ${FLAT_HASH_MAP_SRC} ${FAST_FLOAT_SRC})
 ADD_DEPENDENCIES(libDaScript need_and_resolve)
+target_compile_options(libDaScript  PUBLIC -Z7 -MP $<IF:$<CONFIG:Debug>,-MTd,-MT>)
 ADD_PROJECT_XXD_DEPENDS(libDaScript)
 target_include_directories(libDaScript PUBLIC
     ${DAS_SMMALLOC_DIR}
-    ${CMAKE_SOURCE_DIR}/3rdparty/uriparser/include
-    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_LIST_DIR}/3rdparty/uriparser/include
+    ${CMAKE_CURRENT_LIST_DIR}/include
 )
 target_link_libraries(libDaScript libUriParser)
 #target_link_libraries(libDaScript fmt::fmt)
