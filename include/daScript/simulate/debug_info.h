@@ -440,8 +440,8 @@ namespace das
     int getTupleFieldOffset ( TypeInfo * info, int index );
     int getVariantFieldOffset ( TypeInfo * info, int index );
 
-    bool isSameType ( const TypeInfo * THIS, const TypeInfo * decl, RefMatters refMatters, ConstMatters constMatters, TemporaryMatters temporaryMatters, bool topLevel );
-    bool isCompatibleCast ( const StructInfo * THIS, const StructInfo * castS );
+    bool isSameType ( const TypeInfo * self, const TypeInfo * decl, RefMatters refMatters, ConstMatters constMatters, TemporaryMatters temporaryMatters, bool topLevel );
+    bool isCompatibleCast ( const StructInfo * self, const StructInfo * castS );
     bool isValidArgumentType ( TypeInfo * argType, TypeInfo * passType );
     bool isMatchingArgumentType ( TypeInfo * argType, TypeInfo * passType);
 

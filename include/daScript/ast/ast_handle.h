@@ -292,6 +292,17 @@ namespace das
         __forceinline StructureField & addField ( const string & na, const string & cppNa = "" ) {
             return addFieldEx ( na, cppNa.empty() ? na : cppNa, off, makeType<TT>(*mlib) );
         }
+		template<typename TT>
+		__forceinline StructureField& addFieldRt(off_t off, const string& na, const string& cppNa = "")
+		{
+			return addFieldEx(na, cppNa.empty() ? na : cppNa, off, makeType<TT>(*mlib));
+		}
+
+		__forceinline StructureField& addFieldRtEx(off_t off, const TypeDeclPtr & pT, const string& na, const string& cppNa = "")
+		{
+			return addFieldEx(na, cppNa.empty() ? na : cppNa, off, pT);
+		}
+
         virtual SimNode * simulateCopy ( Context & context, const LineInfo & at, SimNode * l, SimNode * r ) const override {
             return context.code->makeNode<SimNode_CopyRefValue>(at, l, r, uint32_t(sizeof(OT)));
         }

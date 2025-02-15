@@ -5,7 +5,7 @@ include(GNUInstallDirs)
 # for now we gonna run with exceptions enabled
 #add_compile_definitions(DAS_ENABLE_EXCEPTIONS=1)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 #set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -14,7 +14,7 @@ option(DAS_CLANG_BIND_DISABLED "Disable dasClangBind (libclang bindings, C/C++ p
 option(DAS_LLVM_DISABLED "Disable dasLLVM (llvm bindings)" ON)
 option(DAS_QUIRREL_DISABLED "Disable dasQuirrel (quirrel bindings)" ON)
 option(DAS_HV_DISABLED "Disable dasHV (websokets,http server and client)" ON)
-option(DAS_GLFW_DISABLED "Disable dasGLFW (GLFW window for graphics apps)" OFF)
+option(DAS_GLFW_DISABLED "Disable dasGLFW (GLFW window for graphics apps)" ON)
 option(DAS_IMGUI_DISABLED "Disable dasIMGUI (IMGUI, IMNODES, IMGUI-NODE-EDITOR gui libraries)" ON)
 option(DAS_BGFX_DISABLED "Disable dasBGFX (BGFX graphics API)" ON)
 option(DAS_XBYAK_DISABLED "Disable dasXbyak (XBYAK and ZYDIS, x86 assembly, jit)" ON)
@@ -681,7 +681,11 @@ ADD_LIBRARY(libDaScript ${PARSER_GENERATED_SRC} ${PARSER_SRC} ${VECMATH_SRC} ${A
     ${MISC_SRC} ${SIMULATE_SRC} ${SIMULATE_FUSION_SRC} ${TEST_SRC} ${MAIN_SRC}
 	${DAGOR_NOISE_SRC} ${FLAT_HASH_MAP_SRC} ${FAST_FLOAT_SRC})
 ADD_DEPENDENCIES(libDaScript need_and_resolve)
-target_compile_options(libDaScript  PUBLIC -Z7 -MP $<IF:$<CONFIG:Debug>,-MTd,-MT>)
+
+if(USE_WINDOWS)
+    target_compile_options(libDaScript  PUBLIC -Z7 -MP $<IF:$<CONFIG:Debug>,-MTd,-MT>)
+endif()
+
 ADD_PROJECT_XXD_DEPENDS(libDaScript)
 target_include_directories(libDaScript PUBLIC
     ${DAS_SMMALLOC_DIR}

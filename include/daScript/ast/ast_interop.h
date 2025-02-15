@@ -20,8 +20,9 @@ namespace das
     template<typename R, typename ...Args> struct makeFuncArgs<R (*)(Args...)> : makeFuncArgs<R (Args...)> {};
     template<typename R, typename ...Args>
     struct makeFuncArgs<R (Args...)> {
-        static __forceinline vector<TypeDeclPtr> make ( const ModuleLibrary & lib ) {
-            return makeBuiltinArgs<R,Args...>(lib);
+        template<typename ModLib>
+        static __forceinline vector<TypeDeclPtr> make ( const ModLib & lib ) {
+            return makeBuiltinArgs<ModLib, R,Args...>(lib);
         }
     };
 
@@ -40,7 +41,8 @@ namespace das
             constructExternal(makeFuncArgs<FuncArgT>::make(lib));
         }
 #else
-        __forceinline ExternalFn(const char * name, const ModuleLibrary & lib, const char * cppName = nullptr)
+        template<typename ModLib>
+        __forceinline ExternalFn(const char * name, const ModLib & lib, const char * cppName = nullptr)
         : ExternalFnBase(name,cppName) {
             constructExternal(makeFuncArgs<FuncArgT>::make(lib));
         }
@@ -64,11 +66,13 @@ namespace das
     template  <InteropFunction func, typename RetT, typename ...Args>
     class InteropFn : public BuiltInFunction {
     public:
-        __forceinline InteropFn(const char * name, const ModuleLibrary & lib, const char * cppName = nullptr)
+
+        template<typename ModLib>
+        __forceinline InteropFn(const char * name, const ModLib & lib, const char * cppName = nullptr)
             : BuiltInFunction(name,cppName) {
             this->callBased = true;
             this->interopFn = true;
-            constructInterop(makeBuiltinArgs<RetT, Args...>(lib));
+            constructInterop(makeBuiltinArgs<ModLib, RetT, Args...>(lib));
         }
         virtual SimNode * makeSimNode ( Context & context, const vector<ExpressionPtr> & ) override {
             const char * fnName = context.code->allocateName(this->name);
@@ -119,13 +123,14 @@ namespace das
     template  <typename CType, typename ...Args>
     class BuiltIn_PlacementNew : public BuiltInFunction {
     public:
-        __forceinline BuiltIn_PlacementNew(const char * fn, const ModuleLibrary & lib, const char * cna = nullptr)
+        template<typename ModLib>
+        __forceinline BuiltIn_PlacementNew(const char * fn, const ModLib & lib, const char * cna = nullptr)
         : BuiltInFunction(fn,cna), fnName(fn) {
             this->modifyExternal = true;
             this->isTypeConstructor = true;
             this->copyOnReturn = true;
             this->moveOnReturn = true;
-            construct(makeBuiltinArgs<CType,Args...>(lib));
+            construct(makeBuiltinArgs<ModLib, CType,Args...>(lib));
         }
         virtual SimNode * makeSimNode ( Context & context, const vector<ExpressionPtr> & ) override {
             return context.code->makeNode<SimNode_PlacementNew<CType,Args...>>(at,fnName);
@@ -140,14 +145,15 @@ namespace das
     template  <typename CType, typename ...Args>
     class BuiltIn_Using : public BuiltInFunction {
     public:
-        __forceinline BuiltIn_Using(const ModuleLibrary & lib, const char * cppName)
+         template<typename ModLib>
+        __forceinline BuiltIn_Using(const ModLib & lib, const char * cppName)
         : BuiltInFunction("using","das_using") {
             this->cppName = string("das_using<") + cppName + ">::use";
             this->aotTemplate = true;
             this->modifyExternal = true;
             this->invoke = true;
             this->jitContextAndLineInfo = true; // we need context and line info for usingFunc
-            vector<TypeDeclPtr> args = makeBuiltinArgs<void,Args...>(lib);
+            vector<TypeDeclPtr> args = makeBuiltinArgs<ModLib, void,Args...>(lib);
             auto argT = makeType<CType>(lib);
             if ( !argT->canCopy() && !argT->canMove() ) {
                 args.emplace_back(makeType<const TBlock<void,TExplicit<CType>>>(lib));
@@ -224,11 +230,11 @@ namespace das
     }
 
 #if DAS_SLOW_CALL_INTEROP
-    template <typename FuncT, FuncT fn, template <typename FuncTT> class SimNodeT = SimNode_ExtFuncCall, typename QQ = defaultTempFn>
+    template <typename FuncT, FuncT fn, template <typename FuncTT> class SimNodeT = SimNode_ExtFuncCall, typename QQ = defaultTempFn, typename ModLib = ModuleLibrary>
 #else
-    template <typename FuncT, FuncT fn, template <typename FuncTT, FuncTT fnt> class SimNodeT = SimNode_ExtFuncCall, typename QQ = defaultTempFn>
+    template <typename FuncT, FuncT fn, template <typename FuncTT, FuncTT fnt> class SimNodeT = SimNode_ExtFuncCall, typename QQ = defaultTempFn, typename ModLib = ModuleLibrary>
 #endif
-    inline auto addExtern ( Module & mod, const ModuleLibrary & lib, const char * name, SideEffects seFlags,
+    inline auto addExtern ( Module & mod, const ModLib & lib, const char * name, SideEffects seFlags,
                                   const char * cppName = nullptr, QQ && tempFn = QQ() ) {
 #if DAS_SLOW_CALL_INTEROP
         using SimNodeType = SimNodeT<FuncT>;

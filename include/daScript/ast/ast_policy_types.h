@@ -4,10 +4,12 @@ namespace  das {
     template  <typename SimT, typename RetT, typename ...Args>
     class BuiltInFn : public BuiltInFunction {
     public:
-        __forceinline BuiltInFn(const char * fn, const ModuleLibrary & lib, const char * cna = nullptr, bool pbas = true)
+
+        template<typename ModLib>
+        __forceinline BuiltInFn(const char * fn, const ModLib & lib, const char * cna = nullptr, bool pbas = true)
         : BuiltInFunction(fn,cna) {
             this->policyBased = pbas;
-            construct(makeBuiltinArgs<RetT,Args...>(lib));
+            construct(makeBuiltinArgs<ModLib, RetT,Args...>(lib));
         }
         virtual SimNode * makeSimNode ( Context & context, const vector<ExpressionPtr> & ) override {
             return context.code->makeNode<SimT>(at);

@@ -1011,8 +1011,8 @@ namespace das
         string cppName;
     };
 
-    template <typename RetT, typename ...Args>
-    ___noinline vector<TypeDeclPtr> makeBuiltinArgs ( const ModuleLibrary & lib ) {
+    template <typename ModLib, typename RetT, typename ...Args>
+    ___noinline vector<TypeDeclPtr> makeBuiltinArgs ( const ModLib & lib ) {
         return { makeType<RetT>(lib), makeArgumentType<Args>(lib)... };
     }
 

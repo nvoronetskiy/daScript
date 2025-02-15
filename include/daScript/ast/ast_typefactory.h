@@ -38,11 +38,11 @@ namespace das {                                                             \
         static ___noinline TypeDeclPtr make(const ModuleLibrary & library );\
     };                                                                      \
                                                                             \
-    template <typename TT>                                                  \
+    template <typename TT>                                    \
     struct typeName;                                                        \
                                                                             \
     template <>                                                             \
-    struct typeName<CTYPE> {                                                \
+    struct typeName<CTYPE> {                                          \
         constexpr static const char * name() { return #TYPE; }              \
     };                                                                      \
 };
