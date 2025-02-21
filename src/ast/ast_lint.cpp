@@ -529,7 +529,7 @@ namespace das {
                         arg->at, CompilationError::cant_be_null);
                 }
             }
-            if ( expr->func->name=="builtin`to_table_move" && expr->func->fromGeneric && expr->func->fromGeneric->module->name=="$" ) {
+            if ( starts_with(expr->func->name,"builtin`to_table_move`") && expr->func->fromGeneric && expr->func->fromGeneric->module->name=="$" ) {
                 verifyToTableMove(expr);
             }
         }
