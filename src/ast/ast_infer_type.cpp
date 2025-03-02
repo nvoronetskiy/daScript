@@ -651,6 +651,8 @@ namespace das {
             return resT;
         }
 
+        // "_" is "*" with thisModule
+        // "__" is thisModule->name with this module
         Module * getSearchModule(string & moduleName) const {
             if ( moduleName=="_" ) {
                 moduleName = "*";
@@ -1204,8 +1206,12 @@ namespace das {
         MatchingFunctions findMatchingFunctions ( const string & name, const vector<TypeDeclPtr>& types, const vector<MakeFieldDeclPtr> & arguments, bool inferBlock = false ) const {
             string moduleName, funcName;
             splitTypeName(name, moduleName, funcName);
-            MatchingFunctions result;
             auto inWhichModule = getSearchModule(moduleName);
+            return findMatchingFunctions(moduleName, inWhichModule, funcName, types, arguments, inferBlock);
+        }
+
+        MatchingFunctions findMatchingFunctions ( const string & moduleName, Module * inWhichModule, const string & funcName, const vector<TypeDeclPtr>& types, const vector<MakeFieldDeclPtr> & arguments, bool inferBlock = false ) const {
+            MatchingFunctions result;
             auto thisModule = program->thisModule.get();
             auto hFuncName = hash64z(funcName.c_str());
             program->library.foreach([&](Module * mod) -> bool {
@@ -1242,13 +1248,15 @@ namespace das {
         MatchingFunctions findMatchingFunctions ( const string & name, const vector<TypeDeclPtr> & types, bool inferBlock = false, bool visCheck = true ) const {
             string moduleName, funcName;
             splitTypeName(name, moduleName, funcName);
-            MatchingFunctions result;
             auto inWhichModule = getSearchModule(moduleName);
+            return findMatchingFunctions(moduleName, inWhichModule, funcName, types, inferBlock, visCheck);
+        }
+
+        MatchingFunctions findMatchingFunctions ( const string & moduleName, Module * inWhichModule, const string & funcName, const vector<TypeDeclPtr> & types, bool inferBlock = false, bool visCheck = true ) const {
+            MatchingFunctions result;
             auto thisModule = program->thisModule.get();
             auto hFuncName = hash64z(funcName.c_str());
-#if DAS_FUNCTION_HASH_LOOKUP
             uint64_t argHash = 0;
-#endif
             program->library.foreach([&](Module * mod) -> bool {
                 auto itFnList = mod->functionsByName.find(hFuncName);
                 if ( itFnList != mod->functionsByName.end() ) {
@@ -1259,12 +1267,6 @@ namespace das {
                         if ( !visCheck || isVisibleFunc(inWhichModule,getFunctionVisModule(pFn.get()) ) ) {
                             if ( !pFn->fromGeneric || thisModule->isVisibleDirectly(mod) ) {
                                 if ( canCallPrivate(pFn,inWhichModule,thisModule) ) {
-#if !(DAS_FUNCTION_HASH_LOOKUP)
-                                    if ( isFunctionCompatible(pFn, types, false, inferBlock) ) {
-                                        result.push_back(pFn.get());
-                                    }
-#else
-
                                     if ( !argHash ) {
                                         argHash = getLookupHash(types);
                                     }
@@ -1281,7 +1283,6 @@ namespace das {
                                     } else {
                                         pFn->lookup[argHash] = false;
                                     }
-#endif
                                 }
                             }
                         }
@@ -1292,24 +1293,43 @@ namespace das {
             return result;
         }
 
-        MatchingFunctions findMatchingGenerics ( const string & name, const vector<TypeDeclPtr>& types, const vector<MakeFieldDeclPtr> & arguments ) const {
+        void findMatchingFunctionsAndGenerics ( MatchingFunctions & resultFunctions, MatchingFunctions & resultGenerics, const string & name, const vector<TypeDeclPtr>& types, const vector<MakeFieldDeclPtr> & arguments, bool inferBlock = false ) const {
             string moduleName, funcName;
             splitTypeName(name, moduleName, funcName);
-            MatchingFunctions result;
             auto inWhichModule = getSearchModule(moduleName);
             auto thisModule = program->thisModule.get();
             auto hFuncName = hash64z(funcName.c_str());
             program->library.foreach([&](Module * mod) -> bool {
-                auto itFnList = mod->genericsByName.find(hFuncName);
-                if ( itFnList != mod->genericsByName.end() ) {
-                    auto & goodFunctions = itFnList->second;
-                    for ( auto & pFn : goodFunctions ) {
-                        if ( pFn->jitOnly && !program->policies.jit ) continue;
-                        if ( pFn->isTemplate ) continue;
-                        if ( isVisibleFunc(inWhichModule,getFunctionVisModule(pFn.get())) ) {
-                            if ( canCallPrivate(pFn,inWhichModule,thisModule) ) {
-                                if ( isFunctionCompatible(pFn, types, arguments, true, true) ) {   // infer block here?
-                                    result.push_back(pFn.get());
+                {   // functions
+                    auto itFnList = mod->functionsByName.find(hFuncName);
+                    if ( itFnList != mod->functionsByName.end() ) {
+                        auto & goodFunctions = itFnList->second;
+                        for ( auto & pFn : goodFunctions ) {
+                            if ( pFn->isTemplate ) continue;
+                            if ( isVisibleFunc(inWhichModule,getFunctionVisModule(pFn.get())) ) {
+                                if ( !pFn->fromGeneric || thisModule->isVisibleDirectly(mod) ) {
+                                    if ( canCallPrivate(pFn,inWhichModule,thisModule) ) {
+                                        if ( isFunctionCompatible(pFn, types, arguments, false, inferBlock) ) {
+                                            resultFunctions.push_back(pFn.get());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                {   // generics
+                    auto itFnList = mod->genericsByName.find(hFuncName);
+                    if ( itFnList != mod->genericsByName.end() ) {
+                        auto & goodFunctions = itFnList->second;
+                        for ( auto & pFn : goodFunctions ) {
+                            if ( pFn->jitOnly && !program->policies.jit ) continue;
+                            if ( pFn->isTemplate ) continue;
+                            if ( isVisibleFunc(inWhichModule,getFunctionVisModule(pFn.get())) ) {
+                                if ( canCallPrivate(pFn,inWhichModule,thisModule) ) {
+                                    if ( isFunctionCompatible(pFn, types, arguments, true, true) ) {   // infer block here?
+                                        resultGenerics.push_back(pFn.get());
+                                    }
                                 }
                             }
                         }
@@ -1317,26 +1337,66 @@ namespace das {
                 }
                 return true;
             },moduleName);
-            return result;
         }
 
-        MatchingFunctions findMatchingGenerics ( const string & name, const vector<TypeDeclPtr> & types ) const {
+        void findMatchingFunctionsAndGenerics ( MatchingFunctions & resultFunctions, MatchingFunctions & resultGenerics, const string & name, const vector<TypeDeclPtr> & types, bool inferBlock = false, bool visCheck = true ) const {
             string moduleName, funcName;
             splitTypeName(name, moduleName, funcName);
-            MatchingFunctions result;
             auto inWhichModule = getSearchModule(moduleName);
             auto thisModule = program->thisModule.get();
             auto hFuncName = hash64z(funcName.c_str());
+            uint64_t argHash = getLookupHash(types);
             program->library.foreach([&](Module * mod) -> bool {
-                auto itFnList = mod->genericsByName.find(hFuncName);
-                if ( itFnList != mod->genericsByName.end() ) {
-                    auto & goodFunctions = itFnList->second;
-                    for ( auto & pFn : goodFunctions ) {
-                        if ( pFn->isTemplate ) continue;
-                        if ( isVisibleFunc(inWhichModule,getFunctionVisModule(pFn.get())) ) {
-                            if ( canCallPrivate(pFn,inWhichModule,thisModule) ) {
-                                if ( isFunctionCompatible(pFn, types, true, true) ) {   // infer block here?
-                                    result.push_back(pFn.get());
+                { // functions
+                    auto itFnList = mod->functionsByName.find(hFuncName);
+                    if ( itFnList != mod->functionsByName.end() ) {
+                        auto & goodFunctions = itFnList->second;
+                        for ( auto & pFn : goodFunctions ) {
+                            if ( pFn->jitOnly && !program->policies.jit ) continue;
+                            if ( pFn->isTemplate ) continue;
+                            if ( !visCheck || isVisibleFunc(inWhichModule,getFunctionVisModule(pFn.get()) ) ) {
+                                if ( !pFn->fromGeneric || thisModule->isVisibleDirectly(mod) ) {
+                                    if ( canCallPrivate(pFn,inWhichModule,thisModule) ) {
+                                        auto itLook = pFn->lookup.find(argHash);    // if found in lookup
+                                        if ( itLook != pFn->lookup.end() ) {
+                                            if ( itLook->second ) {
+                                                resultFunctions.push_back(pFn.get());
+                                            }
+                                            continue;
+                                        }
+                                        if ( isFunctionCompatible(pFn, types, false, inferBlock) ) {
+                                            resultFunctions.push_back(pFn.get());
+                                            pFn->lookup[argHash] = true;
+                                        } else {
+                                            pFn->lookup[argHash] = false;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                { // generics
+                    auto itFnList = mod->genericsByName.find(hFuncName);
+                    if ( itFnList != mod->genericsByName.end() ) {
+                        auto & goodFunctions = itFnList->second;
+                        for ( auto & pFn : goodFunctions ) {
+                            if ( pFn->isTemplate ) continue;
+                            if ( isVisibleFunc(inWhichModule,getFunctionVisModule(pFn.get())) ) {
+                                if ( canCallPrivate(pFn,inWhichModule,thisModule) ) {
+                                    auto itLook = pFn->lookup.find(argHash);    // if found in lookup
+                                    if ( itLook != pFn->lookup.end() ) {
+                                        if ( itLook->second ) {
+                                            resultGenerics.push_back(pFn.get());
+                                        }
+                                        continue;
+                                    }
+                                    if ( isFunctionCompatible(pFn, types, true, true) ) {   // infer block here?
+                                        resultGenerics.push_back(pFn.get());
+                                        pFn->lookup[argHash] = true;
+                                    } else {
+                                        pFn->lookup[argHash] = false;
+                                    }
                                 }
                             }
                         }
@@ -1344,7 +1404,6 @@ namespace das {
                 }
                 return true;
             },moduleName);
-            return result;
         }
 
         void reportDualFunctionNotFound( const string & name, const string & extra,
@@ -1623,7 +1682,7 @@ namespace das {
 
         bool hasDefaultUserConstructor ( const string & sna ) const {
             vector<TypeDeclPtr> argDummy;
-            auto fnlist = findMatchingFunctions("__::" + sna, argDummy);
+            auto fnlist = findMatchingFunctions(program->thisModule->name, program->thisModule.get(), sna, argDummy); // "__::sna"
             for ( auto & fn : fnlist ) {
                 if ( fn->arguments.size()==0 ) {
                     return true;
@@ -1681,7 +1740,7 @@ namespace das {
 
         MatchingFunctions getCloneFunc ( const TypeDeclPtr & left, const TypeDeclPtr & right ) const {
             vector<TypeDeclPtr> argDummy = { left, right };
-            auto clones = findMatchingFunctions("_::clone", argDummy);
+            auto clones = findMatchingFunctions("*", program->thisModule.get(), "clone", argDummy); // "_::clone"
             applyLSP(argDummy, clones);
             return clones;
         }
@@ -1692,7 +1751,7 @@ namespace das {
 
         MatchingFunctions getFinalizeFunc ( const TypeDeclPtr & subexpr ) const {
             vector<TypeDeclPtr> argDummy = { subexpr };
-            auto fins = findMatchingFunctions("_::finalize", argDummy);
+            auto fins = findMatchingFunctions("*", program->thisModule.get(), "finalize", argDummy); // "_::finalize"
             applyLSP(argDummy, fins);
             return fins;
         }
@@ -5440,21 +5499,24 @@ namespace das {
             }
             return nullptr;
         }
+
         virtual ExpressionPtr visit ( ExprField * expr ) override {
             if ( expr->value->rtti_isVar() && !expr->value->type ) {    // if its a var expression, but it did not infer
                 auto var = static_cast<ExprVar *>(expr->value.get());
                 string moduleName, enumName;
                 splitTypeName(var->name, moduleName, enumName);
-                getSearchModule(moduleName);
+                auto inWhichModule = getSearchModule(moduleName);
                 vector<Enumeration *> possibleEnums;
                 vector<TypeDecl *> possibleBitfields;
                 program->library.foreach([&](Module * mod) -> bool {
-                    if ( auto possibleEnum = mod->findEnum(enumName) ) {
-                        possibleEnums.push_back(possibleEnum.get());
-                    }
-                    if ( auto possibleBitfield = mod->findAlias(enumName) ) {
-                        if ( possibleBitfield->isBitfield() ) {
-                            possibleBitfields.push_back(possibleBitfield.get());
+                    if ( inWhichModule->isVisibleDirectly(mod) ) {
+                        if ( auto possibleEnum = mod->findEnum(enumName) ) {
+                            possibleEnums.push_back(possibleEnum.get());
+                        }
+                        if ( auto possibleBitfield = mod->findAlias(enumName) ) {
+                            if ( possibleBitfield->isBitfield() ) {
+                                possibleBitfields.push_back(possibleBitfield.get());
+                            }
                         }
                     }
                     return true;
@@ -5486,6 +5548,21 @@ namespace das {
                         error("bitfield '" + expr->name + "' not found in " + describeType(alias), "", "",
                             expr->at, CompilationError::cant_get_field);
                         return Visitor::visit(expr);
+                    }
+                } else {
+                    if ( verbose ) {
+                        // note - we only report this error if verbose, i.e. if we are reporting FINAL error
+                        // this is an error only if things failed to compile
+                        TextWriter tw;
+                        tw << "possible candidates:\n";
+                        for ( auto en : possibleEnums ) {
+                            tw << "\tenum " << en->name << " in " << (en->module->name.empty() ? "this module" : en->module->name) << "\n";
+                        }
+                        for ( auto bf : possibleBitfields ) {
+                            tw << "\tbitfield " << bf->alias << " in " << (bf->alias.empty() ? "this module" : bf->alias) << "\n";
+                        }
+                        error("'" + var->name + "' is ambiguous", tw.str(), "",
+                            expr->at, CompilationError::cant_get_field);
                     }
                 }
             }
@@ -7606,15 +7683,10 @@ namespace das {
         }
     // ExprCallMacro
         virtual void preVisit ( ExprCallMacro * expr ) override {
-            auto errc = ctx.thisProgram->errors.size();
             auto thisModule = ctx.thisProgram->thisModule.get();
             expr->inFunction = func.get();
             canFoldResult = expr->macro->canFoldReturnResult(expr) && canFoldResult;
-            expr->macro->preVisit(ctx.thisProgram, thisModule, expr);
-            if ( errc==ctx.thisProgram->errors.size() ) {
-                error("unsupported call macro " + expr->macro->name + "", "potentially missing require", "",
-                    expr->at, CompilationError::unsupported_call_macro);
-            }
+            expr->macro->preVisit(ctx.thisProgram, thisModule, expr); // pre-visit is allowed to do nothing and not report errors.
             return Visitor::preVisit(expr);
         }
         virtual ExpressionPtr visit ( ExprCallMacro * expr ) override {
@@ -7625,8 +7697,8 @@ namespace das {
                 reportAstChanged();
                 return substitute;
             }
-            if ( errc==ctx.thisProgram->errors.size() ) {
-                error("unsupported call macro " + expr->macro->name,  "", "",
+            if ( errc==ctx.thisProgram->errors.size() ) {   // this fail safe adds error if macro failed, but did not report any errors
+                error("call macro '" + expr->macro->name + "' failed to compile",  "possibly missing require", "",
                     expr->at, CompilationError::unsupported_call_macro);
             }
             return Visitor::visit(expr);
@@ -7845,8 +7917,8 @@ namespace das {
                 //TODO: report error
                 return Visitor::visit(expr);
             }
-            auto functions = findMatchingFunctions(expr->name, nonNamedTypes, expr->arguments, true);
-            auto generics = findMatchingGenerics(expr->name, nonNamedTypes, expr->arguments);
+            MatchingFunctions functions, generics;
+            findMatchingFunctionsAndGenerics(functions, generics, expr->name, nonNamedTypes, expr->arguments, true);
             if ( functions.size()> 1 ) {
                 vector<TypeDeclPtr> types;
                 types.reserve(expr->arguments.size());
@@ -8379,11 +8451,9 @@ namespace das {
             if (!inferArguments(types, expr->arguments)) {
                 return nullptr;
             }
-            MatchingFunctions  functions;
-            MatchingFunctions generics;
+            MatchingFunctions functions, generics;
             if ( !lookupFunction ) {
-                functions = findMatchingFunctions(expr->name, types, true);
-                generics = findMatchingGenerics(expr->name, types);
+                findMatchingFunctionsAndGenerics(functions, generics, expr->name, types, true);
                 applyLSP(types,functions);
             } else {
                 functions.push_back(lookupFunction);
@@ -8469,7 +8539,7 @@ namespace das {
                 if ( generics.size()==1 ) {
                     auto oneGeneric = generics.back();
                     auto genName = getGenericInstanceName(oneGeneric);
-                    auto instancedFunctions = findMatchingFunctions("__::" + genName, types, true);
+                    auto instancedFunctions = findMatchingFunctions(program->thisModule->name, program->thisModule.get(), genName, types, true); // "__::genName"
                     if ( instancedFunctions.size() > 1 ) {
                         TextWriter ss;
                         for ( auto & instFn : instancedFunctions ) {
@@ -9055,8 +9125,8 @@ namespace das {
                     args.push_back(decl->value->type);
                     auto compareName = ".`" + decl->name + "`clone";
                     auto opName = "_::" + compareName;
-                    auto funs = findMatchingFunctions(opName, args);
-                    auto gens = findMatchingGenerics(opName, args);
+                    MatchingFunctions funs, gens;
+                    findMatchingFunctionsAndGenerics(funs, gens, opName, args);
                     bool brokenStrictProperty = false;
                     if ( funs.size()==1 || gens.size()==1 ) {
                         if ( strictProperties ) {
@@ -9926,9 +9996,7 @@ namespace das {
                 auto mnh = fn->getMangledNameHash();
                 if ( hash != mnh ) {
                     refreshFunctions.emplace_back(make_tuple(fn.get(), hash, mnh));
-#if DAS_FUNCTION_HASH_LOOKUP
                     { AstFuncLookup dummy; swap(fn->lookup,dummy); }    // invalidate lookup hash, something changed
-#endif
                 }
             });
             for ( auto rfn : refreshFunctions ) {
