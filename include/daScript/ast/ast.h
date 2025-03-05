@@ -619,6 +619,7 @@ namespace das
         static ExpressionPtr autoDereference ( const ExpressionPtr & expr );
         virtual SimNode * simulate (Context & /*context*/ ) const { DAS_ASSERT(0); return nullptr; };
         virtual SimNode * trySimulate (Context & context, uint32_t extraOffset, const TypeDeclPtr & r2vType ) const;
+        virtual void markNoDiscard() { }
         virtual bool rtti_isAssume() const { return false; }
         virtual bool rtti_isSequence() const { return false; }
         virtual bool rtti_isConstant() const { return false; }
@@ -794,7 +795,7 @@ namespace das
           static_cast<std::underlying_type<SideEffects>::type>(rhs));
     }
 
-    typedef das_hash_map<uint64_t,bool> AstFuncLookup;
+    typedef safebox_map<bool> AstFuncLookup;
 
     struct InferHistory {
         LineInfo    at;
@@ -1121,7 +1122,10 @@ namespace das
         ReaderMacroPtr findReaderMacro ( const string & name ) const;
         TypeInfoMacroPtr findTypeInfoMacro ( const string & name ) const;
         ExprCallFactory * findCall ( const string & name ) const;
-        bool isVisibleDirectly ( Module * objModule ) const;
+        __forceinline bool isVisibleDirectly ( Module * objModule ) const {
+            if ( objModule==this ) return true;
+            return requireModule.find(objModule) != requireModule.end();
+        }
         bool compileBuiltinModule ( const string & name, unsigned char * str, unsigned int str_len );//will replace last symbol to 0
         static Module * require ( const string & name );
         static Module * requireEx ( const string & name, bool allowPromoted );
@@ -1173,13 +1177,13 @@ namespace das
         safebox<Enumeration>                        enumerations;
         safebox<Variable>                           globals;
         safebox<Function>                           functions;          // mangled name 2 function name
-        safebox_map<vector<FunctionPtr>>            functionsByName;    // all functions of the same name
+        safebox_map<vector<Function*>>              functionsByName;    // all functions of the same name
         safebox<Function>                           generics;           // mangled name 2 generic name
-        safebox_map<vector<FunctionPtr>>            genericsByName;     // all generics of the same name
+        safebox_map<vector<Function*>>              genericsByName;     // all generics of the same name
         mutable das_map<string, ExprCallFactory>    callThis;
         das_map<string, TypeInfoMacroPtr>           typeInfoMacros;
         das_map<uint64_t, uint64_t>                 annotationData;
-        das_map<Module *,bool>                      requireModule;      // visibility modules
+        das_hash_map<Module *,bool>                 requireModule;      // visibility modules
         vector<PassMacroPtr>                        macros;             // infer macros (clean infer, assume no errors)
         vector<PassMacroPtr>                        inferMacros;        // infer macros (dirty infer, assume half-way-there tree)
         vector<PassMacroPtr>                        optimizationMacros; // optimization macros
@@ -1392,11 +1396,11 @@ namespace das
         shared_ptr<DebugInfoAllocator>  debugInfo;
         bool                            rtti = false;
     protected:
-        das_map<string,StructInfo *>        smn2s;
-        das_map<string,TypeInfo *>          tmn2t;
-        das_map<string,VarInfo *>           vmn2v;
-        das_map<string,FuncInfo *>          fmn2f;
-        das_map<string,EnumInfo *>          emn2e;
+        das_hash_map<string,StructInfo *>        smn2s;
+        das_hash_map<string,TypeInfo *>          tmn2t;
+        das_hash_map<string,VarInfo *>           vmn2v;
+        das_hash_map<string,FuncInfo *>          fmn2f;
+        das_hash_map<string,EnumInfo *>          emn2e;
     };
 
     struct CodeOfPolicies {

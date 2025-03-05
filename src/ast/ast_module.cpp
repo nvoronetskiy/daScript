@@ -469,7 +469,7 @@ namespace das {
             }
         }
         if ( functions.insert(mangledName, fn) ) {
-            functionsByName[hash64z(fn->name.c_str())].push_back(fn);
+            functionsByName[hash64z(fn->name.c_str())].push_back(fn.get());
             fn->module = this;
             return true;
         } else {
@@ -485,7 +485,7 @@ namespace das {
         auto mangledName = fn->getMangledName();
         fn->module = nullptr;
         if ( generics.insert(mangledName, fn) ) {
-            genericsByName[hash64z(fn->name.c_str())].push_back(fn);
+            genericsByName[hash64z(fn->name.c_str())].push_back(fn.get());
             fn->module = this;
             return true;
         } else {
@@ -1047,11 +1047,6 @@ namespace das {
         }
         userData[data->name] = ModuleGroupUserDataPtr(data);
         return true;
-    }
-
-    bool Module::isVisibleDirectly ( Module * objModule ) const {
-        if ( objModule==this ) return true;
-        return requireModule.find(objModule) != requireModule.end();
     }
 
     using ModulesPullers = das::vector<module_pull_t>;

@@ -679,7 +679,7 @@ namespace das {
             return fn->fromGeneric ? fn->getOrigin()->module : fn->module;
         }
 
-        bool canCallPrivate ( const FunctionPtr & pFn, Module * mod, Module * thisMod ) const {
+        bool canCallPrivate ( Function * pFn, Module * mod, Module * thisMod ) const {
             if ( !pFn->privateFunction ) {
                 return true;
             } else if ( pFn->module==mod || pFn->module==thisMod ) {
@@ -729,9 +729,9 @@ namespace das {
                     auto & goodFunctions = itFnList->second;
                     for ( auto & pFn : goodFunctions ) {
                         if ( pFn->isTemplate ) continue;
-                        if ( isVisibleFunc(inWhichModule,getFunctionVisModule(pFn.get())) ) {
+                        if ( isVisibleFunc(inWhichModule,getFunctionVisModule(pFn)) ) {
                             if ( canCallPrivate(pFn,inWhichModule,program->thisModule.get()) ) {
-                                result.push_back(pFn.get());
+                                result.push_back(pFn);
                             }
                         }
                     }
@@ -877,7 +877,7 @@ namespace das {
             return true;
         }
 
-        bool isFunctionCompatible ( const FunctionPtr & pFn, const vector<TypeDeclPtr> & types, bool inferAuto, bool inferBlock, bool checkLastArgumentsInit = true ) const {
+        bool isFunctionCompatible ( Function * pFn, const vector<TypeDeclPtr> & types, bool inferAuto, bool inferBlock, bool checkLastArgumentsInit = true ) const {
             if ( pFn->arguments.size() < types.size() ) {
                 return false;
             }
@@ -938,7 +938,7 @@ namespace das {
             return true;
         }
 
-        bool isFunctionCompatible ( const FunctionPtr & pFn, const vector<TypeDeclPtr>& nonNamedTypes, const vector<MakeFieldDeclPtr> & arguments, bool inferAuto, bool inferBlock ) const {
+        bool isFunctionCompatible ( Function * pFn, const vector<TypeDeclPtr>& nonNamedTypes, const vector<MakeFieldDeclPtr> & arguments, bool inferAuto, bool inferBlock ) const {
             if ( ( pFn->arguments.size() < arguments.size() ) || ( pFn->arguments.size() < nonNamedTypes.size() ) ) {
                 return false;
             }
@@ -1220,11 +1220,11 @@ namespace das {
                     auto & goodFunctions = itFnList->second;
                     for ( auto & pFn : goodFunctions ) {
                         if ( pFn->isTemplate ) continue;
-                        if ( isVisibleFunc(inWhichModule,getFunctionVisModule(pFn.get())) ) {
+                        if ( isVisibleFunc(inWhichModule,getFunctionVisModule(pFn)) ) {
                             if ( !pFn->fromGeneric || thisModule->isVisibleDirectly(mod) ) {
                                 if ( canCallPrivate(pFn,inWhichModule,thisModule) ) {
                                     if ( isFunctionCompatible(pFn, types, arguments, false, inferBlock) ) {
-                                        result.push_back(pFn.get());
+                                        result.push_back(pFn);
                                     }
                                 }
                             }
@@ -1241,8 +1241,7 @@ namespace das {
             for ( auto & arg : types ) {
                 arg->getLookupHash(argHash);
             }
-            DAS_VERIFY(argHash);
-            return argHash;
+            return argHash ? argHash : UINT64_C(14695981039346656037);
         }
 
         MatchingFunctions findMatchingFunctions ( const string & name, const vector<TypeDeclPtr> & types, bool inferBlock = false, bool visCheck = true ) const {
@@ -1264,7 +1263,7 @@ namespace das {
                     for ( auto & pFn : goodFunctions ) {
                         if ( pFn->jitOnly && !program->policies.jit ) continue;
                         if ( pFn->isTemplate ) continue;
-                        if ( !visCheck || isVisibleFunc(inWhichModule,getFunctionVisModule(pFn.get()) ) ) {
+                        if ( !visCheck || isVisibleFunc(inWhichModule,getFunctionVisModule(pFn) ) ) {
                             if ( !pFn->fromGeneric || thisModule->isVisibleDirectly(mod) ) {
                                 if ( canCallPrivate(pFn,inWhichModule,thisModule) ) {
                                     if ( !argHash ) {
@@ -1273,12 +1272,12 @@ namespace das {
                                     auto itLook = pFn->lookup.find(argHash);    // if found in lookup
                                     if ( itLook != pFn->lookup.end() ) {
                                         if ( itLook->second ) {
-                                            result.push_back(pFn.get());
+                                            result.push_back(pFn);
                                         }
                                         continue;
                                     }
                                     if ( isFunctionCompatible(pFn, types, false, inferBlock) ) {
-                                        result.push_back(pFn.get());
+                                        result.push_back(pFn);
                                         pFn->lookup[argHash] = true;
                                     } else {
                                         pFn->lookup[argHash] = false;
@@ -1306,11 +1305,11 @@ namespace das {
                         auto & goodFunctions = itFnList->second;
                         for ( auto & pFn : goodFunctions ) {
                             if ( pFn->isTemplate ) continue;
-                            if ( isVisibleFunc(inWhichModule,getFunctionVisModule(pFn.get())) ) {
+                            if ( isVisibleFunc(inWhichModule,getFunctionVisModule(pFn)) ) {
                                 if ( !pFn->fromGeneric || thisModule->isVisibleDirectly(mod) ) {
                                     if ( canCallPrivate(pFn,inWhichModule,thisModule) ) {
                                         if ( isFunctionCompatible(pFn, types, arguments, false, inferBlock) ) {
-                                            resultFunctions.push_back(pFn.get());
+                                            resultFunctions.push_back(pFn);
                                         }
                                     }
                                 }
@@ -1325,10 +1324,10 @@ namespace das {
                         for ( auto & pFn : goodFunctions ) {
                             if ( pFn->jitOnly && !program->policies.jit ) continue;
                             if ( pFn->isTemplate ) continue;
-                            if ( isVisibleFunc(inWhichModule,getFunctionVisModule(pFn.get())) ) {
+                            if ( isVisibleFunc(inWhichModule,getFunctionVisModule(pFn)) ) {
                                 if ( canCallPrivate(pFn,inWhichModule,thisModule) ) {
                                     if ( isFunctionCompatible(pFn, types, arguments, true, true) ) {   // infer block here?
-                                        resultGenerics.push_back(pFn.get());
+                                        resultGenerics.push_back(pFn);
                                     }
                                 }
                             }
@@ -1354,18 +1353,18 @@ namespace das {
                         for ( auto & pFn : goodFunctions ) {
                             if ( pFn->jitOnly && !program->policies.jit ) continue;
                             if ( pFn->isTemplate ) continue;
-                            if ( !visCheck || isVisibleFunc(inWhichModule,getFunctionVisModule(pFn.get()) ) ) {
+                            if ( !visCheck || isVisibleFunc(inWhichModule,getFunctionVisModule(pFn) ) ) {
                                 if ( !pFn->fromGeneric || thisModule->isVisibleDirectly(mod) ) {
                                     if ( canCallPrivate(pFn,inWhichModule,thisModule) ) {
                                         auto itLook = pFn->lookup.find(argHash);    // if found in lookup
                                         if ( itLook != pFn->lookup.end() ) {
                                             if ( itLook->second ) {
-                                                resultFunctions.push_back(pFn.get());
+                                                resultFunctions.push_back(pFn);
                                             }
                                             continue;
                                         }
                                         if ( isFunctionCompatible(pFn, types, false, inferBlock) ) {
-                                            resultFunctions.push_back(pFn.get());
+                                            resultFunctions.push_back(pFn);
                                             pFn->lookup[argHash] = true;
                                         } else {
                                             pFn->lookup[argHash] = false;
@@ -1382,17 +1381,17 @@ namespace das {
                         auto & goodFunctions = itFnList->second;
                         for ( auto & pFn : goodFunctions ) {
                             if ( pFn->isTemplate ) continue;
-                            if ( isVisibleFunc(inWhichModule,getFunctionVisModule(pFn.get())) ) {
+                            if ( isVisibleFunc(inWhichModule,getFunctionVisModule(pFn)) ) {
                                 if ( canCallPrivate(pFn,inWhichModule,thisModule) ) {
                                     auto itLook = pFn->lookup.find(argHash);    // if found in lookup
                                     if ( itLook != pFn->lookup.end() ) {
                                         if ( itLook->second ) {
-                                            resultGenerics.push_back(pFn.get());
+                                            resultGenerics.push_back(pFn);
                                         }
                                         continue;
                                     }
                                     if ( isFunctionCompatible(pFn, types, true, true) ) {   // infer block here?
-                                        resultGenerics.push_back(pFn.get());
+                                        resultGenerics.push_back(pFn);
                                         pFn->lookup[argHash] = true;
                                     } else {
                                         pFn->lookup[argHash] = false;
@@ -1680,9 +1679,14 @@ namespace das {
             }
         }
 
+        MatchingFunctions findDefaultConstructor ( const string & sna ) const {
+            vector<TypeDeclPtr> argDummy;
+            return findMatchingFunctions(program->thisModule->name, program->thisModule.get(), sna, argDummy); // "__::sna"
+        }
+
         bool hasDefaultUserConstructor ( const string & sna ) const {
             vector<TypeDeclPtr> argDummy;
-            auto fnlist = findMatchingFunctions(program->thisModule->name, program->thisModule.get(), sna, argDummy); // "__::sna"
+            auto fnlist = findDefaultConstructor(sna);
             for ( auto & fn : fnlist ) {
                 if ( fn->arguments.size()==0 ) {
                     return true;
@@ -2703,7 +2707,7 @@ namespace das {
                     if ( itFnList != mod->functionsByName.end() ) {
                         auto & goodFunctions = itFnList->second;
                         for ( auto & missFn : goodFunctions ) {
-                            auto visM = getFunctionVisModule(missFn.get());
+                            auto visM = getFunctionVisModule(missFn);
                             bool isVisible = isVisibleFunc(inWhichModule,visM);
                             if ( !reportInvisibleFunctions  && !isVisible ) continue;
                             bool isPrivate = missFn->privateFunction && !canCallPrivate(missFn,inWhichModule,program->thisModule.get());
@@ -7999,76 +8003,8 @@ namespace das {
             return Visitor::visit(expr);
         }
     // ExprCall
-        void markNoDiscard ( Expression * expr ) { // this one marks that expression tree is not discarded (stops at call)
-            if ( expr->rtti_isCall() ) {
-                auto call = (ExprCall *) expr;
-                call->notDiscarded = true;
-            } else if ( expr->rtti_isR2V() ) {
-                auto r2v = (ExprRef2Value *) expr;
-                markNoDiscard(r2v->subexpr.get());
-            } else if  ( expr->rtti_isRef2Ptr() ) {
-                auto r2p = (ExprRef2Ptr *) expr;
-                markNoDiscard(r2p->subexpr.get());
-            } else if ( expr->rtti_isPtr2Ref() ) {
-                auto p2r = (ExprPtr2Ref *) expr;
-                markNoDiscard(p2r->subexpr.get());
-            } else if ( expr->rtti_isAt() ) {
-                auto at = (ExprAt *) expr;
-                markNoDiscard(at->subexpr.get());
-            } else if ( expr->rtti_isSafeAt() ) {
-                auto at = (ExprSafeAt *) expr;
-                markNoDiscard(at->subexpr.get());
-            } else if  ( expr->rtti_isField() ) {
-                auto fl = (ExprField *) expr;
-                markNoDiscard(fl->value.get());
-            } else if ( expr->rtti_isSafeField() ) {
-                auto fl = (ExprSafeField *) expr;
-                markNoDiscard(fl->value.get());
-            } else if ( expr->rtti_isOp1() ) {
-                auto op1 = (ExprOp1 *) expr;
-                markNoDiscard(op1->subexpr.get());
-            } else if ( expr->rtti_isOp2() ) {
-                auto op2 = (ExprOp2 *) expr;
-                markNoDiscard(op2->left.get());
-                markNoDiscard(op2->right.get());
-            } else if ( expr->rtti_isOp3() ) {
-                auto op3 = (ExprOp3 *) expr;
-                markNoDiscard(op3->subexpr.get());
-                markNoDiscard(op3->left.get());
-                markNoDiscard(op3->right.get());
-            } else if ( expr->rtti_isNullCoalescing() ) {
-                auto nc = (ExprNullCoalescing *) expr;
-                markNoDiscard(nc->subexpr.get());
-                markNoDiscard(nc->defaultValue.get());
-            } else if ( expr->rtti_isIsVariant() ) {
-                auto iv = (ExprIsVariant *) expr;
-                markNoDiscard(iv->value.get());
-            } else if ( expr->rtti_isAsVariant() ) {
-                auto av = (ExprAsVariant *) expr;
-                markNoDiscard(av->value.get());
-            } else if ( expr->rtti_isMakeArray() ) {
-                auto ma = (ExprMakeArray *) expr;
-                for ( auto & arg : ma->values ) {
-                    markNoDiscard(arg.get());
-                }
-            } else if ( expr->rtti_isMakeStruct() ) {
-                auto ms = (ExprMakeStruct *) expr;
-                for ( auto & arg : ms->structs ) {
-                    for ( auto & fld : *arg ) {
-                        markNoDiscard(fld->value.get());
-                    }
-                }
-            } else if ( expr->rtti_isMakeTuple() ) {
-                auto mt = (ExprMakeTuple *) expr;
-                for ( auto & arg : mt->values ) {
-                    markNoDiscard(arg.get());
-                }
-            } else if ( expr->rtti_isMakeVariant() ) {
-                auto mv = (ExprMakeVariant *) expr;
-                for ( auto & v : mv->variants ) {
-                    markNoDiscard(v->value.get());
-                }
-            }
+        __forceinline void markNoDiscard ( Expression * expr ) { // this one marks that expression tree is not discarded (stops at call)
+            expr->markNoDiscard();
         }
         virtual void preVisit ( ExprCall * call ) override {
             Visitor::preVisit(call);
@@ -8446,7 +8382,7 @@ namespace das {
             return true;
         }
 
-        FunctionPtr inferFunctionCall ( ExprLooksLikeCall * expr, InferCallError cerr=InferCallError::functionOrGeneric, Function * lookupFunction = nullptr ) {
+        FunctionPtr inferFunctionCall ( ExprLooksLikeCall * expr, InferCallError cerr=InferCallError::functionOrGeneric, Function * lookupFunction = nullptr, bool failOnMissingCtor = true ) {
             vector<TypeDeclPtr> types;
             if (!inferArguments(types, expr->arguments)) {
                 return nullptr;
@@ -8686,9 +8622,13 @@ namespace das {
                             if ( expr->arguments.size()==0 ) {
                                 expr->name = aliasT->structType->name;
                                 bool isPrivate = aliasT->structType->privateStructure || aliasT->structType->module != program->thisModule.get();
-                                tryMakeStructureCtor (aliasT->structType, isPrivate, true);
+                                if ( !tryMakeStructureCtor (aliasT->structType, isPrivate, true) ) {
+                                    if ( failOnMissingCtor ) {
+                                        error("default constructor " + aliasT->structType->name + " is not visible directly",
+                                            "try default<" + expr->name + "> instead", "", expr->at, CompilationError::function_not_found);
+                                    }
+                                }
                             } else {
-
                                 error("can only generate default structure constructor without arguments",
                                     "", "", expr->at, CompilationError::invalid_argument_count);
                             }
@@ -9246,12 +9186,13 @@ namespace das {
                 expr->makeType && (expr->makeType->isClass() || (expr->alwaysUseInitializer && expr->makeType->isStructure()));
             if (  isClassCtor ) {
                 auto st = expr->makeType->structType;
+                // auto ctorName = st->module->name  + "::" + st->name;
                 auto ctorName = st->module->name  + "::" + st->name;
                 auto tempCall = make_smart<ExprLooksLikeCall>(expr->at,ctorName);
-                expr->constructor = inferFunctionCall(tempCall.get(),InferCallError::functionOrGeneric).get();
+                expr->constructor = inferFunctionCall(tempCall.get(),InferCallError::functionOrGeneric, nullptr, false).get();
                 if ( !expr->constructor ) {
                   tempCall->name = "__::" + st->name;
-                  expr->constructor = inferFunctionCall(tempCall.get(),InferCallError::functionOrGeneric).get();
+                  expr->constructor = inferFunctionCall(tempCall.get(),InferCallError::functionOrGeneric, nullptr, false).get();
                 }
                 if ( !expr->constructor ) {
                     error("class constructor can't be inferred " + describeType(expr->makeType),
