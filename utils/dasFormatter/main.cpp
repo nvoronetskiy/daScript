@@ -73,10 +73,10 @@ vector<TestData> test_cases() {
     vector<TestData> base = {
         {"[[/**/Foo/*0*/a/*a*/=/**/1/*a*///abc\n,//dsa\n/*dsa*/\nb=2.0/**/\n//dsa\n]]",
                                                                 "/**/Foo(/*0*/a/*a*/=/**/1/*a*///abc\n,//dsa\n/*dsa*/\nb=2.0/**/\n//dsa\n)"}, // 1 // no uninit because it's redundant
-        {"[[/**/Foo/**/]]",                                     "/**/Foo(uninitialized/**/)"}, // 2
+        {"[[/**/Foo/**/]]",                                     "/**/Foo(/**/)"}, // 2
         {"[[/*a*/Foo(/*b*/)/*c*/]]",                            "/*a*/Foo(/*b*/)/*c*/"}, // 3
         {"[[/*a*/Foo(/*b*/)/*c*/ a=1/*d*/,/*e*/b=2.0/*f*/]]",   "/*a*//*b*/Foo(/*c*/ a=1/*d*/,/*e*/b=2.0/*f*/)"}, // 4
-        {"[[/*a*/auto/*b*/1/*c*/,/*d*/2/*e*/]]",                "/*a*/(/*b*/1/*c*/,/*d*/2/*e*/)"}, // 13
+        {"[[/*a*/auto/*b*/1/*c*/,/*d*/2/*e*/]]",                "/*a*//*b*/(1/*c*/,/*d*/2/*e*/)"}, // 13
 //        {"[[for x in [1, 20]; x*x; where x%2 == 0]];", "[iterator for x in [1, 20]; x*x; where x%2 == 0];"}, // 5 // each result is discarded, which is unsaf
         {"[{/*a*/Foo/*b*/a=1/*c*/,/*d*/b=2./*e*/;/*f*/a=2/*g*/,/*h*/b=1./*i*/}]",
                                                                 "/*a*/[Foo(/*b*/a=1/*c*/,/*d*/b=2./*e*/), Foo(/*f*/a=2/*g*/,/*h*/b=1./*i*/)]"}, // 6
@@ -85,7 +85,7 @@ vector<TestData> test_cases() {
 //        {"[{Foo a=1,b=2.;a=2,b=1. <optional_block>}]", "[Foo(a=1,b=2.),Foo(a=2,b=1.)]"}, // what about optional block in new syntax
         {"[{/*a*/auto/*b*/1/*c*/;/*d*/2/*e*/;/*f*/3/*g*/;/*h*/4/*i*/}]",
                                                                 "/*a*/[/*b*/1/*c*/,/*d*/2/*e*/,/*f*/3/*g*/,/*h*/4/*i*/]"}, // 8
-        {"[{/*a*/auto/*b*/1/*c*/,/*d*/2.2/*e*/}]",              "/*a*/[(/*b*/1/*c*/,/*d*/2.2/*e*/)]"}, // 8
+        {"[{/*a*/auto/*b*/1/*c*/,/*d*/2.2/*e*/}]",              "/*a*/[/*b*/(1/*c*/,/*d*/2.2/*e*/)]"}, // 8
         {"[{/*a*/for/*b*/x/*c*/in/*d*/0..10/*e*/;/*f*/x*x/*g*/;/*h*/where/*i*/x%2==0/*j*/}]",
                                                                 "[/*a*/for/*b*/x/*c*/in/*d*/0..10/*e*/;/*f*/x*x/*g*/;/*h*/where/*i*/x%2==0/*j*/]"}, // 9
         {"{{/*a*/for/*b*/x/*c*/in/*d*/0..10/*e*/;/*f*/x*x/*g*/;/*h*/where/*i*/x%2==0/*j*/}}",
@@ -94,18 +94,25 @@ vector<TestData> test_cases() {
         {R"({{/*a*/1=>"a"/*b*/;/*c*/2=>"b"/*d*/;/*e*/3=>"c"/*f*/;/*g*/4=>"d"/*h*/}})",
                                                                 R"({/*a*/1=>"a"/*b*/,/*c*/2=>"b"/*d*/,/*e*/3=>"c"/*f*/,/*g*/4=>"d"/*h*/})"}, // 10
         {R"([[/*a*/auto/*b*/1/*c*/,/*d*/2./*e*/,/*f*/"3"/*g*/;/*h*/1/*i*/,/*j*/4./*k*/,/*l*/"2"/*m*/]])",
-                                                                R"(/*a*/fixed_array((/*b*/1/*c*/,/*d*/2./*e*/,/*f*/"3"/*g*/),(/*h*/1/*i*/,/*j*/4./*k*/,/*l*/"2"/*m*/)))"}, // 13
+                                                                R"(/*a*/fixed_array(/*b*/(1/*c*/,/*d*/2./*e*/,/*f*/"3"/*g*/),/*h*/(1/*i*/,/*j*/4./*k*/,/*l*/"2"/*m*/)))"}, // 13
 //
 //        // anything
         {"[[/*a*/auto/*b*/1/*c*/;/*d*/2/*e*/]]",
                                                                 "/*a*/fixed_array(/*b*/1/*c*/,/*d*/2/*e*/)"},
         {"[[/*a*/Foo?/*b*/]]",                                  "/*a*/default<Foo?>/*b*/"},
-        {"[[/*a*/Foo#/*b*/]]",                                  "/*a*/struct<Foo#>(uninitialized/*b*/)"},
+        {"[[/*a*/Foo#/*b*/]]",                                  "/*a*/struct<Foo#>(/*b*/)"},
+        {"[[tuple<string; float>\n"
+         "    \"a\", 1.0;\n"
+         "    \"b\", 2.0;"
+         "]]",
+         "fixed_array<tuple<string; float>>(\n"
+         "    (\"a\", 1.0),\n"
+         "    (\"b\", 2.0))"},
 
         // nested
 
         {"[[/*a*/Bar/*b*/a=[[/*c*/Foo/*f*/b=2.0/*g*/]]/*h*/]]",
-         "/*a*/Bar(/*b*/a=/*c*/Foo(uninitialized/*f*/b=2.0/*g*/)/*h*/)"},
+         "/*a*/Bar(/*b*/a=/*c*/Foo(/*f*/b=2.0/*g*/)/*h*/)"},
     };
     for (auto &[in, out, options]: base) {
         in = in_prefix + in + postfix;
@@ -140,7 +147,7 @@ vector<TestData> test_cases() {
                                                              "}",
         },
         {"def main()//aa\n    /**/let x = 1    // 123",      "def main() {//aa\n    /**/let x = 1;    // 123\n}"},
-        {"bitfield A\n    refCount",                     "bitfield A {\n    refCount,\n}"},
+        {"bitfield A\n    refCount",                     "bitfield A {\n    refCount\n}"},
 
         {"def b(x, y)\n    for x in y\n        x = x + 1",
                                                              "def b(x, y) {\n    for (x in y) {\n        x = x + 1;\n    }\n}"},
@@ -161,9 +168,9 @@ vector<TestData> test_cases() {
          "    two //d\n"
          "    three//e",
                                                              "bitfield/*a*/Test {// b\n"
-                                                             "    one, //c\n"
-                                                             "    two, //d\n"
-                                                             "    three,//e\n"
+                                                             "    one //c\n"
+                                                             "    two //d\n"
+                                                             "    three//e\n"
                                                              "}"},
         {
             "enum/*a*/Test/*b*/:/*c*/int// a\n"
@@ -171,6 +178,30 @@ vector<TestData> test_cases() {
             "enum/*a*/Test/*b*/:/*c*/int {// a\n"
             "    b// d\n"
             "}\n"
+        },
+        {
+            "def foo(x){}\n"
+            "def main() {\n"
+            "    foo() $() {} \n"
+            "}\n",
+            "def foo(x){}\n"
+            "def main() {\n"
+            "    foo($() {}); \n"
+            "}\n"
+        },
+        {
+            "def foo(x, y){}\n"
+            "def main() {\n"
+            "    foo(123) $() {} \n"
+            "}\n",
+            "def foo(x){}\n"
+            "def main() {\n"
+            "    foo(123, $() {}); \n"
+            "}\n"
+        },
+        {
+            "let x = @ <| () {}\n",
+            "let x = @ () {};\n"
         },
         {
             "def test()//a\n"
@@ -243,7 +274,7 @@ int main(int argc, char** argv) {
         tp << help();
         return -1;
     }
-    for (size_t i = 1; i < argc; i++) {
+    for (int i = 1; i < argc; i++) {
         const string arg = argv[i];
         if (arg.front() != '-') {
             files.emplace_back(arg);

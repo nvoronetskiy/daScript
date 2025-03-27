@@ -544,6 +544,10 @@ namespace das {
 
     uint64_t Variable::getMangledNameHash() const {
         auto mangledName = getMangledName();
+        return Variable::getMangledNameHash(mangledName);
+    }
+
+    uint64_t Variable::getMangledNameHash(const string &mangledName) {
         return hash_blockz64((uint8_t *)mangledName.c_str());
     }
 
@@ -976,6 +980,12 @@ namespace das {
     }
 
     // expression
+
+    string Expression::describe() const {
+        TextWriter ss;
+        ss << *this;
+        return ss.str();
+    }
 
     ExpressionPtr Expression::clone( const ExpressionPtr & expr ) const {
         if ( !expr ) {
@@ -2688,6 +2698,9 @@ namespace das {
             cexpr->values.push_back(val->clone());
         }
         cexpr->makeType = make_smart<TypeDecl>(*makeType);
+        if (recordType) {
+            cexpr->recordType = make_smart<TypeDecl>(*recordType);
+        }
         cexpr->gen2 = gen2;
         return cexpr;
     }
@@ -2731,6 +2744,9 @@ namespace das {
         cexpr->recordNames = recordNames;
         if ( makeType ) {
             cexpr->makeType = make_smart<TypeDecl>(*makeType);
+        }
+        if (recordType) {
+            cexpr->recordType = make_smart<TypeDecl>(*recordType);
         }
         cexpr->isKeyValue = isKeyValue;
         return cexpr;

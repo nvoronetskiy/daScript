@@ -267,7 +267,7 @@ namespace das {
                 return context.code->makeNode<SimNode_At>(at,
                                                           rv->simulate(context),
                                                           idx->simulate(context),
-                                                          uint32_t(sizeof(float)*ColC), ofs, RowC);
+                                                          uint32_t(sizeof(float)*ColC), ofs, RowC, "matrix[index]");
             }
         }
         virtual SimNode * simulateGetAtR2V ( Context & context, const LineInfo & at, const TypeDeclPtr & readType,
@@ -279,7 +279,7 @@ namespace das {
                 return context.code->makeValueNode<SimNode_AtR2V>(  r2vType, at,
                                                                     rv->simulate(context),
                                                                     idx->simulate(context),
-                                                                    uint32_t(sizeof(float)*ColC), ofs, RowC);
+                                                                    uint32_t(sizeof(float)*ColC), ofs, RowC, "matrix[index]");
             }
         }
         virtual bool isRawPod() const override {
@@ -297,7 +297,7 @@ namespace das {
 
     template <typename MatT>
     struct SimNode_MatrixCtor : SimNode_CallBase {
-        SimNode_MatrixCtor(const LineInfo & at) : SimNode_CallBase(at) {}
+        SimNode_MatrixCtor(const LineInfo & at) : SimNode_CallBase(at,"") {}
         virtual SimNode * visit ( SimVisitor & vis ) override {
             V_BEGIN();
             V_OP(MatrixCtor);

@@ -125,6 +125,7 @@ namespace das
         virtual bool rtti_node_isJit() const { return false; }
         virtual bool rtti_node_isKeepAlive() const { return false; }
         virtual bool rtti_node_isCallBase() const { return false; }
+        virtual bool rtti_node_isErrorMessage() const { return false; }
     protected:
         virtual ~SimNode() {}
     };
@@ -303,6 +304,10 @@ namespace das
 
     typedef shared_ptr<Context> ContextPtr;
 
+    // todo: Move this structs to separate file
+    struct CodeOfPolicies;
+    struct AnnotationArgumentList;
+
     class Context : public ptr_ref_count, public enable_shared_from_this<Context> {
         template <typename TT> friend struct SimNode_GetGlobalR2V;
         friend struct SimNode_GetGlobal;
@@ -325,6 +330,7 @@ namespace das
         Context(const Context &) = delete;
         Context & operator = (const Context &) = delete;
         virtual ~Context();
+        void setup(size_t totalVars, size_t globalStringHeapSize, CodeOfPolicies policies, AnnotationArgumentList options);
         void strip();
         void logMemInfo(TextWriter & tw);
 
@@ -332,6 +338,10 @@ namespace das
 
         uint64_t getGlobalSize() const { return globalsSize; }
         uint64_t getSharedSize() const { return sharedSize; }
+        void updateSharedGlobalSize(uint64_t sharedDiff, uint64_t globalDiff) {
+            sharedSize += sharedDiff;
+            globalsSize += globalDiff;
+        }
         uint64_t getInitSemanticHash();
 
         void onAllocateString ( void * ptr, uint64_t size, const LineInfo & at );
@@ -1018,9 +1028,18 @@ __forceinline void profileNode ( SimNode * node ) {
 
 #endif
 
+    // ERROR MESSAGE
+    struct SimNode_WithErrorMessage : SimNode {
+        SimNode_WithErrorMessage ( const LineInfo & at, const char * em )
+            : SimNode(at), errorMessage(em) {}
+        virtual bool rtti_node_isErrorMessage() const override { return true; }
+        virtual SimNode * copyNode ( Context & context, NodeAllocator * code ) override;
+        const char * errorMessage = "";
+    };
+
     // FUNCTION CALL
-    struct SimNode_CallBase : SimNode {
-        SimNode_CallBase ( const LineInfo & at ) : SimNode(at) {}
+    struct SimNode_CallBase : SimNode_WithErrorMessage {
+        SimNode_CallBase ( const LineInfo & at, const char * msg ) : SimNode_WithErrorMessage(at,msg) {}
         virtual bool rtti_node_isCallBase() const override { return true; }
         virtual SimNode * copyNode ( Context & context, NodeAllocator * code ) override;
         void visitCall ( SimVisitor & vis );
@@ -1137,9 +1156,9 @@ __forceinline void profileNode ( SimNode * node ) {
         uint32_t    totalSources;
     };
 
-    struct SimNode_Delete : SimNode {
-        SimNode_Delete ( const LineInfo & a, SimNode * s, uint32_t t )
-            : SimNode(a), subexpr(s), total(t) {}
+    struct SimNode_Delete : SimNode_WithErrorMessage {
+        SimNode_Delete ( const LineInfo & a, SimNode * s, uint32_t t, const char * em )
+            : SimNode_WithErrorMessage(a,em), subexpr(s), total(t) {}
         virtual SimNode * visit ( SimVisitor & vis ) override;
         SimNode *   subexpr;
         uint32_t    total;

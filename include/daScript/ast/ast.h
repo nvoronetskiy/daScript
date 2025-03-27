@@ -321,6 +321,7 @@ namespace das
         VariablePtr clone() const;
         string getMangledName() const;
         uint64_t getMangledNameHash() const;
+        static uint64_t getMangledNameHash(const string &mangledName);
         bool isAccessUnused() const;
         bool isCtorInitialized() const;
         void serialize ( AstSerializer & ser );
@@ -612,6 +613,7 @@ namespace das
     struct Expression : ptr_ref_count {
         Expression() = default;
         Expression(const LineInfo & a) : at(a) {}
+        string describe() const;
         virtual ~Expression() {}
         friend StringWriter& operator<< (StringWriter& stream, const Expression & func);
         virtual ExpressionPtr visit(Visitor & /*vis*/ )  { DAS_ASSERT(0); return this; };
@@ -791,11 +793,11 @@ namespace das
     inline SideEffects operator |(SideEffects lhs, SideEffects rhs)
     {
       return static_cast<SideEffects>(
-          static_cast<std::underlying_type<SideEffects>::type>(lhs) |
-          static_cast<std::underlying_type<SideEffects>::type>(rhs));
+          static_cast<das::underlying_type<SideEffects>::type>(lhs) |
+          static_cast<das::underlying_type<SideEffects>::type>(rhs));
     }
 
-    typedef safebox_map<bool> AstFuncLookup;
+    typedef fragile_bit_set AstFuncLookup;
 
     struct InferHistory {
         LineInfo    at;
@@ -1117,8 +1119,10 @@ namespace das
         FunctionPtr findGeneric ( const string & mangledName ) const;
         FunctionPtr findUniqueFunction ( const string & name ) const;
         StructurePtr findStructure ( const string & name ) const;
+        StructurePtr findStructureByMangledNameHash ( uint64_t hash ) const;
         AnnotationPtr findAnnotation ( const string & name ) const;
         EnumerationPtr findEnum ( const string & name ) const;
+        EnumerationPtr findEnumByMangledNameHash ( uint64_t hash ) const;
         ReaderMacroPtr findReaderMacro ( const string & name ) const;
         TypeInfoMacroPtr findTypeInfoMacro ( const string & name ) const;
         ExprCallFactory * findCall ( const string & name ) const;
@@ -1144,7 +1148,9 @@ namespace das
         void addDependency ( Module * mod, bool pub );
         void addBuiltinDependency ( ModuleLibrary & lib, Module * mod, bool pub = false );
         void serialize( AstSerializer & ser, bool already_exists );
+        void setModuleName ( const string & n );
         FileInfo * getFileInfo() const;
+        string getNamespace() const;
     public:
         template <typename RecAnn>
         void initRecAnnotation ( const smart_ptr<RecAnn> & rec, ModuleLibrary & lib ) {
@@ -1177,9 +1183,9 @@ namespace das
         safebox<Enumeration>                        enumerations;
         safebox<Variable>                           globals;
         safebox<Function>                           functions;          // mangled name 2 function name
-        safebox_map<vector<Function*>>              functionsByName;    // all functions of the same name
+        fragile_hash<vector<Function*>>             functionsByName;    // all functions of the same name
         safebox<Function>                           generics;           // mangled name 2 generic name
-        safebox_map<vector<Function*>>              genericsByName;     // all generics of the same name
+        fragile_hash<vector<Function*>>             genericsByName;     // all generics of the same name
         mutable das_map<string, ExprCallFactory>    callThis;
         das_map<string, TypeInfoMacroPtr>           typeInfoMacros;
         das_map<uint64_t, uint64_t>                 annotationData;
@@ -1201,6 +1207,7 @@ namespace das
         das_hash_map<string,Type>                   options;            // options
         uint64_t                                    cumulativeHash = 0; // hash of all mangled names in this module (for builtin modules)
         string                                      name;
+        uint64_t                                    nameHash = 0;
         string                                      fileName;           // where the module was found, if not built-in
         union {
             struct {
@@ -1267,7 +1274,6 @@ namespace das
         bool addModule ( Module * module );
         void foreach ( const callable<bool (Module * module)> & func, const string & name ) const;
         void foreach_in_order ( const callable<bool (Module * module)> & func, Module * thisM ) const;
-
         void findWithCallback ( const string & name, Module * inWhichModule, const callable<void (Module * pm, const string &name, Module * inWhichModule)> & func ) const;
         void findAlias ( vector<TypeDeclPtr> & ptr, Module * pm, const string & aliasName, Module * inWhichModule ) const;
         vector<TypeDeclPtr> findAlias ( const string & name, Module * inWhichModule ) const;
@@ -1280,15 +1286,19 @@ namespace das
         void findStructure ( vector<StructurePtr> & ptr, Module * pm, const string & funcName, Module * inWhichModule ) const;
         vector<StructurePtr> findStructure ( const string & name, Module * inWhichModule ) const;
         Module * findModule ( const string & name ) const;
+        Module * findModuleByMangledNameHash ( uint64_t hash ) const;
         TypeDeclPtr makeStructureType ( const string & name ) const;
         TypeDeclPtr makeHandleType ( const string & name ) const;
         TypeDeclPtr makeEnumType ( const string & name ) const;
         Module* front() const { return modules.front(); }
         vector<Module *> & getModules() { return modules; }
+        const vector<Module *> & getModules() const { return modules; }
         Module* getThisModule() const { return thisModule; }
         void reset();
+        void renameModule ( Module * module, const string & newName );
     protected:
         vector<Module *>                modules;
+        safebox_map<Module *>           moduleLookupByHash;
         Module *                        thisModule = nullptr;
     };
 
@@ -1597,8 +1607,6 @@ namespace das
         void visit(Visitor & vis, bool visitGenerics = false);
         void setPrintFlags();
         void aotCpp ( Context & context, TextWriter & logs );
-        void writeStandaloneContext ( TextWriter & logs );
-        void writeStandaloneContextMethods ( TextWriter & logs );
         void registerAotCpp ( TextWriter & logs, Context & context, bool headers = true, bool allModules = false );
         void validateAotCpp ( TextWriter & logs, Context & context );
         void buildMNLookup ( Context & context, const vector<FunctionPtr> & lookupFunctions, TextWriter & logs );

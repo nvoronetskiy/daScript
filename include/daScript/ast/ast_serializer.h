@@ -6,6 +6,11 @@
 #include <optional>
 #include <utility>
 
+// enable this one if serialization breaks on tag, to get more info
+#ifndef DAS_SERIALIZE_DTAG
+#define DAS_SERIALIZE_DTAG      0
+#endif
+
 namespace das {
 
     // use FNV32 hash for tags. it's fast and good enough for our purposes
@@ -90,6 +95,8 @@ namespace das {
         size_t              readOffset = 0;
         SerializationStorage * buffer = nullptr;
         bool                seenNewModule = false;
+    // expression lookup
+        das_hash_map<uint32_t, Annotation *> rttiHash2Annotation;
     // file info clean up
         vector<FileInfo*>         deleteUponFinish; // these pointers are for builtins (which we don't serialize) and need to be cleaned manually
         das_hash_set<FileInfo*>   doNotDelete;
@@ -123,6 +130,11 @@ namespace das {
         das_hash_set<Module *>                      writingReadyModules;
         bool                                        ignoreEmptyExternal = false;
         void tag   ( const char * name, uint32_t hash );
+#if DAS_SERIALIZE_DTAG
+        __forceinline void dtag ( const char * name, uint32_t hash ) { tag(name,hash); }
+#else
+        __forceinline void dtag ( const char *, uint32_t ) {}
+#endif
         template<typename T>
         void read  ( T & data ) { buffer->read(data); }
         void read  ( void * data, size_t size );
@@ -211,7 +223,7 @@ namespace das {
 
         template <typename TT>
         AstSerializer & operator << ( vector<TT> & value ) {
-            tag("Vector",hash_tag("Vector"));
+            dtag("Vector",hash_tag("Vector"));
             if ( writing ) {
                 uint64_t size = value.size();
                 serializeAdaptiveSize64(size);
@@ -259,6 +271,7 @@ namespace das {
         void fillOrPatchLater ( Variable * & ptr, uint64_t id );
 
         auto readModuleAndName () -> pair<Module *, string>;
+        auto readModuleAndNameHash () -> pair<Module *, uint64_t>;
 
         void findExternal ( Function * & func );
         void findExternal ( Enumeration * & ptr );

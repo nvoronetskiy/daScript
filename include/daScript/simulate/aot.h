@@ -553,7 +553,7 @@ namespace das {
         }
     };
 
-    template <typename TT>
+    template <typename TT, typename Enable = void>
     struct das_index;
 
     template <typename TT>
@@ -628,11 +628,8 @@ namespace das {
     }
 
     template <typename TT>
-    struct das_index<vector<TT>> : das_default_vector_index<vector<TT>, TT> {};
-
-    template <typename TT>
-    struct das_index<vector<TT> const> : das_default_vector_index<vector<TT>, TT> {};
-
+    struct das_index<TT, std::enable_if_t<std::is_base_of_v<std::vector<typename TT::value_type>, TT>>>
+        : das_default_vector_index<vector<typename TT::value_type>, typename TT::value_type> {};
 
     template <typename TT, typename VecT, uint32_t size>
     struct das_vec_index {
@@ -1045,12 +1042,29 @@ namespace das {
 
     template <int variantSize, int variantAlign, typename ...TA>
     struct alignas(variantAlign) TVariant : Variant {
+        template<int N> using NthType =
+            typename std::tuple_element<N, std::tuple<TA...>>::type;
+
         struct alignas(1) TData {
             char data[variantSize - sizeof(int32_t)];
         };
         TVariant() {}
         TVariant(const TVariant & arr) { moveT(arr); }
         TVariant(TVariant && arr ) { moveT(arr); }
+
+        template <typename T, size_t idx>
+        void set(T val, size_t align) {
+            static_assert(std::is_same_v<NthType<idx>, T>);
+            index = idx;
+            new(data.data + align) T(val);
+        }
+        template <typename T, size_t idx>
+        static TVariant create(T val, size_t align) {
+            TVariant var;
+            var.set<T, idx>(val, align);
+            return var;
+        }
+
         TVariant & operator = ( const TVariant & arr ) { moveT(arr); return *this; }
         TVariant & operator = ( TVariant && arr ) { moveT(arr); return *this; }
         __forceinline void moveT ( const TVariant & arr ) {
@@ -1754,7 +1768,7 @@ namespace das {
 
     template <typename FuncT, FuncT fn>
     struct SimNode_Aot : SimNode_CallBase {
-        __forceinline SimNode_Aot ( ) : SimNode_CallBase(LineInfo()) {
+        __forceinline SimNode_Aot ( ) : SimNode_CallBase(LineInfo(),"") {
             aotFunction = (void*) fn;
         }
         DAS_EVAL_ABI virtual vec4f eval ( Context & context ) override {
@@ -1771,7 +1785,7 @@ namespace das {
 
     template <typename FuncT, FuncT fn>
     struct SimNode_AotCMRES : SimNode_CallBase {
-        __forceinline SimNode_AotCMRES ( ) : SimNode_CallBase(LineInfo()) {}
+        __forceinline SimNode_AotCMRES ( ) : SimNode_CallBase(LineInfo(),"") {}
         DAS_EVAL_ABI virtual vec4f eval ( Context & context ) override {
             DAS_PROFILE_NODE
             vec4f * aa = context.abiArg;
@@ -1792,7 +1806,7 @@ namespace das {
 #endif
 
     struct SimNode_AotInteropBase : SimNode_CallBase {
-        __forceinline SimNode_AotInteropBase() : SimNode_CallBase(LineInfo()) {}
+        __forceinline SimNode_AotInteropBase() : SimNode_CallBase(LineInfo(),"") {}
         DAS_EVAL_ABI virtual vec4f eval ( Context & context ) override {
             DAS_PROFILE_NODE
             return v_zero();
@@ -2654,7 +2668,7 @@ namespace das {
     template <typename TT>
     Sequence das_vector_each_sequence ( TT & vec, Context * context, LineInfoArg * at ) {
         using VectorIterator = StdVectorIterator<TT>;
-        char * iter = context->allocateIterator(sizeof(VectorIterator), "std::vector<> iterator", at);
+        char * iter = context->allocateIterator(sizeof(VectorIterator), "vector<> iterator", at);
         if ( !iter ) context->throw_out_of_memory(false, sizeof(VectorIterator)+16, at);
         new (iter) VectorIterator(&vec, at);
         return { (Iterator *) iter };
@@ -2797,7 +2811,7 @@ namespace das {
     };
 
     char * to_das_string(const string & str, Context * ctx, LineInfoArg * at);
-    char * pass_string( char * str );
+    const char * pass_string( const char * str );
     char * clone_pass_string( char * str, Context * ctx, LineInfoArg * at);
     void set_das_string(string & str, const char * bs);
     void set_string_das(char * & bs, const string & str, Context * ctx, LineInfoArg * at);

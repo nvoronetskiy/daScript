@@ -118,6 +118,29 @@ MACRO(DAS_AOT input genList mainTarget dasAotTool)
     DAS_AOT_EXT(${input} ${genList} ${mainTarget} ${dasAotTool} -aot)
 ENDMACRO()
 
+MACRO(DAS_AOT_STANDALONE input genList mainTarget dasAotTool)
+    get_filename_component(input_src ${input} ABSOLUTE)
+    get_filename_component(input_dir ${input_src} DIRECTORY)
+    get_filename_component(input_name ${input} NAME)
+    get_filename_component(ctx_name ${input} NAME_WE)
+    set(out_dir ${input_dir}/_standalone_ctx_generated)
+    set(out_src ${out_dir}/${input_name}.cpp)
+    file(MAKE_DIRECTORY ${out_dir})
+    ADD_CUSTOM_COMMAND(
+            DEPENDS ${input_src}
+            DEPENDS ${dasAotTool}
+            OUTPUT  ${out_src}
+            COMMENT "AOT precompiling ${input_src} -> ${out_src}"
+            COMMAND ${dasAotTool} -aot ${input_src} ${out_dir} -standalone-context ${ctx_name} -standalone-class Standalone
+    )
+    list(APPEND ${genList} ${out_src})
+    set(custom_name ${mainTarget}_${input_name}_standalone)
+    ADD_CUSTOM_TARGET(${custom_name} DEPENDS ${out_src})
+    set_source_files_properties(${out_src} PROPERTIES GENERATED TRUE)
+    SET_TARGET_PROPERTIES(${custom_name} PROPERTIES FOLDER _${mainTarget}_aot)
+    ADD_DEPENDENCIES(${mainTarget} ${custom_name})
+ENDMACRO()
+
 MACRO(DAS_AOT_LIB input genList mainTarget dasAotTool)
     DAS_AOT_EXT(${input} ${genList} ${mainTarget} ${dasAotTool} -aotlib)
 ENDMACRO()
@@ -432,6 +455,9 @@ list(SORT AST_SRC)
 SOURCE_GROUP_FILES("ast" AST_SRC)
 
 SET(BUILTIN_SRC
+include/daScript/builtin/ast_gen.inc
+include/daScript/builtin/debugapi_gen.inc
+
 src/builtin/module_builtin.h
 src/builtin/module_builtin.cpp
 src/builtin/module_builtin_misc_types.cpp
@@ -459,13 +485,11 @@ src/builtin/module_builtin_ast.h
 src/builtin/module_builtin_uriparser.h
 src/builtin/module_builtin_uriparser.cpp
 src/builtin/module_jit.cpp
-src/builtin/ast_gen.inc
 src/builtin/module_builtin_fio.cpp
 src/builtin/module_builtin_dasbind.cpp
 src/builtin/module_builtin_network.cpp
 src/builtin/module_builtin_debugger.cpp
 src/builtin/module_builtin_jobque.cpp
-src/builtin/debugapi_gen.inc
 src/builtin/module_file_access.cpp
 src/builtin/builtin.das.inc
 src/builtin/builtin.das
@@ -576,6 +600,7 @@ src/simulate/runtime_string.cpp
 src/simulate/runtime_array.cpp
 src/simulate/runtime_table.cpp
 src/simulate/runtime_profile.cpp
+src/simulate/standalone_ctx_utils.cpp
 src/simulate/simulate.cpp
 src/simulate/simulate_exceptions.cpp
 src/simulate/simulate_gc.cpp
@@ -715,7 +740,37 @@ IF(HAIKU)
     TARGET_LINK_LIBRARIES(libDaScript network uuid)
 ENDIF()
 SETUP_CPP11(libDaScript)
+
+add_custom_target(standaloneGenerated)
+SET(STANDALONE_SRC)
+DAS_AOT_STANDALONE("src/das/ast/ast_print.das" STANDALONE_SRC standaloneGenerated daslang)
+
+ADD_LIBRARY(libDaScriptStandalone ${PARSER_GENERATED_SRC} ${PARSER_SRC} ${VECMATH_SRC} ${AST_SRC} ${BUILTIN_SRC}
+        ${MISC_SRC} ${SIMULATE_SRC} ${SIMULATE_FUSION_SRC} ${TEST_SRC} ${MAIN_SRC}
+        ${DAGOR_NOISE_SRC} ${FLAT_HASH_MAP_SRC} ${FAST_FLOAT_SRC} ${DASCRIPT_FMT_SRC} ${STANDALONE_SRC})
+ADD_DEPENDENCIES(libDaScriptStandalone need_and_resolve)
+ADD_DEPENDENCIES(libDaScriptStandalone standaloneGenerated)
+ADD_PROJECT_XXD_DEPENDS(libDaScriptStandalone)
+target_include_directories(libDaScriptStandalone PUBLIC
+        ${DAS_SMMALLOC_DIR}
+        ${CMAKE_SOURCE_DIR}/3rdparty/uriparser/include
+        ${CMAKE_SOURCE_DIR}/include
+)
+target_compile_definitions(libDaScriptStandalone PUBLIC STANDALONE_MODE)
+target_link_libraries(libDaScriptStandalone libUriParser)
+#target_link_libraries(libDaScript fmt::fmt)
+IF(LINUX_UUID)
+    target_link_libraries(libDaScriptStandalone uuid)
+ENDIF()
+IF(UNIX AND NOT APPLE)
+    TARGET_LINK_LIBRARIES(libDaScriptStandalone ${CMAKE_DL_LIBS})
+ENDIF()
+IF(HAIKU)
+    TARGET_LINK_LIBRARIES(libDaScriptStandalone network uuid)
+ENDIF()
+SETUP_CPP11(libDaScriptStandalone)
 #target_precompile_headers(libDaScript PUBLIC include/daScript/misc/platform.h)
+
 
 if(NOT ${DAS_AOT_EXAMPLES_DISABLED})
 
@@ -730,6 +785,7 @@ if(NOT ${DAS_AOT_EXAMPLES_DISABLED})
     DAS_AOT_LIB("daslib/json.das" AOT_GENERATED_SRC dasAotStub daslang)
     DAS_AOT_LIB("daslib/json_boost.das" AOT_GENERATED_SRC dasAotStub daslang)
     DAS_AOT_LIB("daslib/regex.das" AOT_GENERATED_SRC dasAotStub daslang)
+    DAS_AOT_LIB("daslib/ast_boost.das" AOT_GENERATED_SRC dasAotStub daslang)
     DAS_AOT_LIB("daslib/regex_boost.das" AOT_GENERATED_SRC dasAotStub daslang)
     DAS_AOT_LIB("daslib/strings_boost.das" AOT_GENERATED_SRC dasAotStub daslang)
     DAS_AOT_LIB("daslib/random.das" AOT_GENERATED_SRC dasAotStub daslang)
@@ -743,6 +799,7 @@ if(NOT ${DAS_AOT_EXAMPLES_DISABLED})
     )
     add_library(libDaScriptAot STATIC ${AOT_GENERATED_SRC} ${AOT_STUB_SRC})
     ADD_DEPENDENCIES(libDaScriptAot dasAotStub daslang libDaScript)
+    ADD_DEPENDENCIES(libDaScriptStandalone dasAotStub)
     TARGET_LINK_LIBRARIES(libDaScriptAot libDaScript)
     SETUP_CPP11(libDaScriptAot)
 endif()
@@ -759,6 +816,11 @@ if (NOT ${DAS_TOOLS_DISABLED})
     SOURCE_GROUP_FILES("main" DAS_DASCRIPT_MAIN_SRC)
 
     SET(SRC_LIBRARIES libDaScript libDaScriptTest Threads::Threads ${DAS_MODULES_LIBS})
+    SET(SRC_LIBRARIES_BOOTSTRAPPED libDaScriptStandalone libDaScriptTest Threads::Threads ${DAS_MODULES_LIBS})
+
+    add_executable(daslang-boostrapped ${DAS_DASCRIPT_MAIN_SRC} ${AOT_GENERATED_SRC})
+    TARGET_LINK_LIBRARIES(daslang-boostrapped ${SRC_LIBRARIES_BOOTSTRAPPED})
+
 
     add_executable(daslang ${DAS_DASCRIPT_MAIN_SRC})
     TARGET_LINK_LIBRARIES(daslang ${SRC_LIBRARIES})

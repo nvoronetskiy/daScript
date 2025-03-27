@@ -117,6 +117,14 @@ namespace das
         return cast<char *>::to(eval(context));
     }
 
+    SimNode * SimNode_WithErrorMessage::copyNode ( Context & context, NodeAllocator * code ) {
+        SimNode_WithErrorMessage * that = (SimNode_WithErrorMessage *) SimNode::copyNode(context, code);
+        if ( errorMessage ) {
+            that->errorMessage = errorMessage[0]==0 ? "" : code->allocateName(errorMessage);
+        }
+        return that;
+    }
+
     vec4f SimNode_Jit::eval ( Context & context ) {
         auto result = func(&context, context.abiArg, context.abiCMRES);
         context.result = result;
@@ -177,7 +185,7 @@ namespace das
             if ( pLambda->capture ) {
                 SimFunction ** fnMnh = (SimFunction **) pLambda->capture;
                 SimFunction * simFunc = fnMnh[1];
-                if (!simFunc) context.throw_error_at(debugInfo, "lambda finalizer is a null function");
+                if (!simFunc) context.throw_error_at(debugInfo, "lambda finalizer is a null function%s", errorMessage);
                 vec4f argValues[1] = {
                     cast<void *>::from(pLambda->capture)
                 };
@@ -492,7 +500,7 @@ namespace das
     // SimNode_CallBase
 
     SimNode * SimNode_CallBase::copyNode ( Context & context, NodeAllocator * code ) {
-        SimNode_CallBase * that = (SimNode_CallBase *) SimNode::copyNode(context, code);
+        SimNode_CallBase * that = (SimNode_CallBase *) SimNode_WithErrorMessage::copyNode(context, code);
         if ( nArguments ) {
             SimNode ** newArguments = (SimNode **) code->allocate(nArguments * sizeof(SimNode *));
             memcpy ( newArguments, that->arguments, nArguments * sizeof(SimNode *));
@@ -970,6 +978,31 @@ namespace das
         persistent = ph;
     }
 
+    void Context::setup(size_t totalVars, size_t globalStringHeapSize, CodeOfPolicies policies, AnnotationArgumentList options) {
+        verySafeContext = options.getBoolOption("very_safe_context",policies.very_safe_context);
+        breakOnException |= policies.debugger;
+        persistent = options.getBoolOption("persistent_heap", policies.persistent_heap);
+        if ( persistent ) {
+            heap = make_smart<PersistentHeapAllocator>();
+            stringHeap = make_smart<PersistentStringAllocator>();
+        } else {
+            heap = make_smart<LinearHeapAllocator>();
+            stringHeap = make_smart<LinearStringAllocator>();
+        }
+        heap->setInitialSize ( options.getIntOption("heap_size_hint", policies.heap_size_hint) );
+        heap->setLimit ( options.getUInt64Option("heap_size_limit", policies.max_heap_allocated) );
+        stringHeap->setInitialSize ( options.getIntOption("string_heap_size_hint", policies.string_heap_size_hint) );
+        stringHeap->setLimit ( options.getUInt64Option("string_heap_size_limit", policies.max_string_heap_allocated) );
+        constStringHeap = make_shared<ConstStringAllocator>();
+        totalVariables = totalVars;
+        if ( globalStringHeapSize ) {
+            constStringHeap->setInitialSize(globalStringHeapSize);
+        }
+        globalVariables = (GlobalVariable *) code->allocate( totalVars*sizeof(GlobalVariable) );
+        globalsSize = 0;
+        sharedSize = 0;
+    }
+
     void Context::strip() {
         stringHeap.reset();
         heap.reset();
@@ -1416,6 +1449,7 @@ namespace das
         return runWithCatch([&](){
             for ( int j=0, js=totalFunctions; j!=js && !stopFlags; ++j ) {
                 auto & pf = functions[j];
+                DAS_ASSERTF(pf.debugInfo, "Missing debug info for %s", pf.name);
                 if ( pf.debugInfo->flags & FuncInfo::flag_shutdown ) {
                     callOrFastcall(&pf, nullptr, 0);
                 }
@@ -1767,6 +1801,7 @@ namespace das
         for_each_debug_agent([&](const DebugAgentPtr & pAgent){
             if ( daScriptEnvironment::bound && daScriptEnvironment::bound->g_threadLocalDebugAgent.debugAgent ) {
                 daScriptEnvironment::bound->g_threadLocalDebugAgent.debugAgent->onUninstall(pAgent.get());
+                pAgent->onUninstall(daScriptEnvironment::bound->g_threadLocalDebugAgent.debugAgent.get());
             }
             for ( auto & ap : g_DebugAgents ) {
                 ap.second.debugAgent->onUninstall(pAgent.get());
@@ -1776,6 +1811,7 @@ namespace das
         {
             std::lock_guard<std::recursive_mutex> guard(g_DebugAgentMutex);
             swap(agents, g_DebugAgents);
+            daScriptEnvironment::bound->g_threadLocalDebugAgent = {};
         }
     }
 

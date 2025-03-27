@@ -44,7 +44,7 @@ namespace debugapi {
     typedef Func DapiFunc;
 }
 
-#include "debugapi_gen.inc"
+#include "daScript/builtin/debugapi_gen.inc"
 
     struct DebugAgentAdapter : DebugAgent, DapiDebugAgent_Adapter {
         DebugAgentAdapter ( char * pClass, const StructInfo * info, Context * ctx )
@@ -1318,7 +1318,7 @@ namespace debugapi {
                 SideEffects::modifyExternal, "dapiStackWalk")
                     ->args({"walker","context","line"});
             addExtern<DAS_BIND_FUN(dapiStackDepth)>(*this, lib,  "stack_depth",
-                SideEffects::modifyExternal, "dapiStacDepth")
+                SideEffects::modifyExternal, "dapiStackDepth")
                     ->arg("context");
             // global variable
             addInterop<get_global_variable,void *,vec4f,const char *>(*this,lib,"get_context_global_variable",

@@ -60,6 +60,7 @@ namespace das {
             relaxedAssign = prog->options.getBoolOption("relaxed_assign", prog->policies.relaxed_assign);
             relaxedPointerConst = prog->options.getBoolOption("relaxed_pointer_const", prog->policies.relaxed_pointer_const);
             unsafeTableLookup = prog->options.getBoolOption("unsafe_table_lookup", prog->policies.unsafe_table_lookup);
+            thisModule = prog->thisModule.get();
         }
         bool finished() const { return !needRestart; }
         bool verbose = true;
@@ -102,16 +103,17 @@ namespace das {
         bool                    relaxedAssign = false;
         bool                    relaxedPointerConst = false;
         bool                    unsafeTableLookup = false;
+        Module *                thisModule = nullptr;
     public:
         vector<FunctionPtr>     extraFunctions;
     protected:
         string generateNewLambdaName(const LineInfo & at) {
-            string mod = ctx.thisProgram->thisModule->name;
+            string mod = thisModule->name;
             if ( mod.empty() ) mod = "thismodule";
             return "_lambda_" + mod + "_" + to_string(at.line) + "_" + to_string(program->newLambdaIndex++);
         }
         string generateNewLocalFunctionName(const LineInfo & at) {
-            string mod = ctx.thisProgram->thisModule->name;
+            string mod = thisModule->name;
             if ( mod.empty() ) mod = "thismodule";
             return "_localfunction_" + mod + "_" + to_string(at.line) + "_" + to_string(program->newLambdaIndex++);
         }
@@ -334,7 +336,7 @@ namespace das {
                 return rT;
             }
             TypeDeclPtr rT;
-            program->thisModule->globals.find_first([&](auto gvar){
+            thisModule->globals.find_first([&](auto gvar){
                 if ( auto vT = gvar->type->findAlias(name,false) ) {
                     rT = vT;
                     return true;
@@ -366,7 +368,7 @@ namespace das {
                 }
             }
             TypeDeclPtr rT;
-            program->thisModule->globals.find_first([&](auto gvar){
+            thisModule->globals.find_first([&](auto gvar){
                 if ( auto vT = gvar->type->findAlias(name) ) {
                     rT = vT;
                     return true;
@@ -560,7 +562,7 @@ namespace das {
                     } else if ( tms.size() > 1 ) {
                         return decl;
                     } else {
-                        auto resType = tms[0]->visit(program,program->thisModule.get(), decl, passType);
+                        auto resType = tms[0]->visit(program,thisModule, decl, passType);
                         if ( !resType ) {
                             return decl;
                         }
@@ -656,10 +658,10 @@ namespace das {
         Module * getSearchModule(string & moduleName) const {
             if ( moduleName=="_" ) {
                 moduleName = "*";
-                return program->thisModule.get();
+                return thisModule;
             } else if ( moduleName=="__" ) {
-                moduleName = program->thisModule->name;
-                return program->thisModule.get();
+                moduleName = thisModule->name;
+                return thisModule;
             } else if ( func ) {
                 if ( func->fromGeneric ) {
                     auto origin = func->getOrigin();
@@ -671,7 +673,7 @@ namespace das {
                     return func->module;
                 }
             } else {
-                return program->thisModule.get();
+                return thisModule;
             }
         }
 
@@ -725,12 +727,12 @@ namespace das {
             auto hFuncName = hash64z(funcName.c_str());
             program->library.foreach([&](Module * mod) -> bool {
                 auto itFnList = mod->functionsByName.find(hFuncName);
-                if ( itFnList != mod->functionsByName.end() ) {
+                if ( itFnList ) {
                     auto & goodFunctions = itFnList->second;
                     for ( auto & pFn : goodFunctions ) {
                         if ( pFn->isTemplate ) continue;
                         if ( isVisibleFunc(inWhichModule,getFunctionVisModule(pFn)) ) {
-                            if ( canCallPrivate(pFn,inWhichModule,program->thisModule.get()) ) {
+                            if ( canCallPrivate(pFn,inWhichModule,thisModule) ) {
                                 result.push_back(pFn);
                             }
                         }
@@ -741,8 +743,25 @@ namespace das {
             return result;
         }
 
-        MatchingFunctions findTypedFuncAddr ( const string & name, const vector<TypeDeclPtr> & arguments ) const {
-            return findMatchingFunctions(name, arguments, false, false);
+        MatchingFunctions findTypedFuncAddr ( string & name, const vector<TypeDeclPtr> & arguments ) {
+            MatchingFunctions result = findMatchingFunctions(name, arguments, false, false);
+            if ( result.size()==0 ) {
+                auto fakeCall = make_smart<ExprCall>(LineInfo(),name);
+                for ( auto & arg : arguments ) {
+                    // TODO: support blocks?
+                    auto fakeArg = make_smart<ExprTypeDecl>(LineInfo(),arg);
+                    fakeArg->type = make_smart<TypeDecl>(*arg);
+                    fakeCall->arguments.push_back(fakeArg);
+                }
+                auto fn = inferFunctionCall(fakeCall.get());
+                if ( fakeCall->name!=name ) {
+                    name = fakeCall->name;
+                    result = findMatchingFunctions(fakeCall->name, arguments, false, false);
+                } else if ( fn ) {
+                    result.push_back(fn.get());
+                }
+            }
+            return result;
         }
 
         // MISSING CANDIDATES
@@ -1212,11 +1231,10 @@ namespace das {
 
         MatchingFunctions findMatchingFunctions ( const string & moduleName, Module * inWhichModule, const string & funcName, const vector<TypeDeclPtr>& types, const vector<MakeFieldDeclPtr> & arguments, bool inferBlock = false ) const {
             MatchingFunctions result;
-            auto thisModule = program->thisModule.get();
             auto hFuncName = hash64z(funcName.c_str());
             program->library.foreach([&](Module * mod) -> bool {
                 auto itFnList = mod->functionsByName.find(hFuncName);
-                if ( itFnList != mod->functionsByName.end() ) {
+                if ( itFnList ) {
                     auto & goodFunctions = itFnList->second;
                     for ( auto & pFn : goodFunctions ) {
                         if ( pFn->isTemplate ) continue;
@@ -1253,12 +1271,11 @@ namespace das {
 
         MatchingFunctions findMatchingFunctions ( const string & moduleName, Module * inWhichModule, const string & funcName, const vector<TypeDeclPtr> & types, bool inferBlock = false, bool visCheck = true ) const {
             MatchingFunctions result;
-            auto thisModule = program->thisModule.get();
             auto hFuncName = hash64z(funcName.c_str());
             uint64_t argHash = 0;
             program->library.foreach([&](Module * mod) -> bool {
                 auto itFnList = mod->functionsByName.find(hFuncName);
-                if ( itFnList != mod->functionsByName.end() ) {
+                if ( itFnList ) {
                     auto & goodFunctions = itFnList->second;
                     for ( auto & pFn : goodFunctions ) {
                         if ( pFn->jitOnly && !program->policies.jit ) continue;
@@ -1267,20 +1284,20 @@ namespace das {
                             if ( !pFn->fromGeneric || thisModule->isVisibleDirectly(mod) ) {
                                 if ( canCallPrivate(pFn,inWhichModule,thisModule) ) {
                                     if ( !argHash ) {
-                                        argHash = getLookupHash(types);
+                                        argHash = fragile_bit_set::key(getLookupHash(types));
                                     }
-                                    auto itLook = pFn->lookup.find(argHash);    // if found in lookup
-                                    if ( itLook != pFn->lookup.end() ) {
-                                        if ( itLook->second ) {
+                                    auto itLook = pFn->lookup.find_and_reserve(argHash);    // if found in lookup
+                                    if ( *itLook ) {
+                                        if ( fragile_bit_set::is_true(*itLook) ) {
                                             result.push_back(pFn);
                                         }
                                         continue;
                                     }
                                     if ( isFunctionCompatible(pFn, types, false, inferBlock) ) {
                                         result.push_back(pFn);
-                                        pFn->lookup[argHash] = true;
+                                        *itLook = fragile_bit_set::set_true(argHash);
                                     } else {
-                                        pFn->lookup[argHash] = false;
+                                        *itLook = fragile_bit_set::set_false(argHash);
                                     }
                                 }
                             }
@@ -1296,12 +1313,11 @@ namespace das {
             string moduleName, funcName;
             splitTypeName(name, moduleName, funcName);
             auto inWhichModule = getSearchModule(moduleName);
-            auto thisModule = program->thisModule.get();
             auto hFuncName = hash64z(funcName.c_str());
             program->library.foreach([&](Module * mod) -> bool {
                 {   // functions
                     auto itFnList = mod->functionsByName.find(hFuncName);
-                    if ( itFnList != mod->functionsByName.end() ) {
+                    if ( itFnList ) {
                         auto & goodFunctions = itFnList->second;
                         for ( auto & pFn : goodFunctions ) {
                             if ( pFn->isTemplate ) continue;
@@ -1319,7 +1335,7 @@ namespace das {
                 }
                 {   // generics
                     auto itFnList = mod->genericsByName.find(hFuncName);
-                    if ( itFnList != mod->genericsByName.end() ) {
+                    if ( itFnList ) {
                         auto & goodFunctions = itFnList->second;
                         for ( auto & pFn : goodFunctions ) {
                             if ( pFn->jitOnly && !program->policies.jit ) continue;
@@ -1342,32 +1358,31 @@ namespace das {
             string moduleName, funcName;
             splitTypeName(name, moduleName, funcName);
             auto inWhichModule = getSearchModule(moduleName);
-            auto thisModule = program->thisModule.get();
             auto hFuncName = hash64z(funcName.c_str());
-            uint64_t argHash = getLookupHash(types);
+            uint64_t argHash = fragile_bit_set::key(getLookupHash(types));
             program->library.foreach([&](Module * mod) -> bool {
                 { // functions
                     auto itFnList = mod->functionsByName.find(hFuncName);
-                    if ( itFnList != mod->functionsByName.end() ) {
+                    if ( itFnList ) {
                         auto & goodFunctions = itFnList->second;
                         for ( auto & pFn : goodFunctions ) {
                             if ( pFn->jitOnly && !program->policies.jit ) continue;
                             if ( pFn->isTemplate ) continue;
                             if ( !visCheck || isVisibleFunc(inWhichModule,getFunctionVisModule(pFn) ) ) {
                                 if ( !pFn->fromGeneric || thisModule->isVisibleDirectly(mod) ) {
-                                    if ( canCallPrivate(pFn,inWhichModule,thisModule) ) {
-                                        auto itLook = pFn->lookup.find(argHash);    // if found in lookup
-                                        if ( itLook != pFn->lookup.end() ) {
-                                            if ( itLook->second ) {
+                                    if ( !visCheck || canCallPrivate(pFn,inWhichModule,thisModule) ) {
+                                        auto itLook = pFn->lookup.find_and_reserve(argHash);    // if found in lookup
+                                        if ( *itLook ) {
+                                            if ( fragile_bit_set::is_true(*itLook) ) {
                                                 resultFunctions.push_back(pFn);
                                             }
                                             continue;
                                         }
                                         if ( isFunctionCompatible(pFn, types, false, inferBlock) ) {
                                             resultFunctions.push_back(pFn);
-                                            pFn->lookup[argHash] = true;
+                                            *itLook = fragile_bit_set::set_true(argHash);
                                         } else {
-                                            pFn->lookup[argHash] = false;
+                                            *itLook = fragile_bit_set::set_false(argHash);
                                         }
                                     }
                                 }
@@ -1377,24 +1392,24 @@ namespace das {
                 }
                 { // generics
                     auto itFnList = mod->genericsByName.find(hFuncName);
-                    if ( itFnList != mod->genericsByName.end() ) {
+                    if ( itFnList ) {
                         auto & goodFunctions = itFnList->second;
                         for ( auto & pFn : goodFunctions ) {
                             if ( pFn->isTemplate ) continue;
-                            if ( isVisibleFunc(inWhichModule,getFunctionVisModule(pFn)) ) {
-                                if ( canCallPrivate(pFn,inWhichModule,thisModule) ) {
-                                    auto itLook = pFn->lookup.find(argHash);    // if found in lookup
-                                    if ( itLook != pFn->lookup.end() ) {
-                                        if ( itLook->second ) {
+                            if ( !visCheck || isVisibleFunc(inWhichModule,getFunctionVisModule(pFn)) ) {
+                                if ( !visCheck || canCallPrivate(pFn,inWhichModule,thisModule) ) {
+                                    auto itLook = pFn->lookup.find_and_reserve(argHash);    // if found in lookup
+                                    if ( *itLook ) {
+                                        if ( fragile_bit_set::is_true(*itLook) ) {
                                             resultGenerics.push_back(pFn);
                                         }
                                         continue;
                                     }
                                     if ( isFunctionCompatible(pFn, types, true, true) ) {   // infer block here?
                                         resultGenerics.push_back(pFn);
-                                        pFn->lookup[argHash] = true;
+                                        *itLook = fragile_bit_set::set_true(argHash);
                                     } else {
-                                        pFn->lookup[argHash] = false;
+                                        *itLook = fragile_bit_set::set_false(argHash);
                                     }
                                 }
                             }
@@ -1450,7 +1465,7 @@ namespace das {
                     auto visM = getFunctionVisModule(missFn);
                     bool isVisible = isVisibleFunc(inWhichModule,visM);
                     if ( !reportInvisibleFunctions  && !isVisible ) continue;
-                    bool isPrivate = missFn->privateFunction && !canCallPrivate(missFn,inWhichModule,program->thisModule.get());
+                    bool isPrivate = missFn->privateFunction && !canCallPrivate(missFn,inWhichModule,thisModule);
                     if ( !reportPrivateFunctions && isPrivate ) continue;
                     ss << "\t";
                     if ( missFn->module && !missFn->module->name.empty() && !(missFn->module->name=="$") )
@@ -1462,7 +1477,7 @@ namespace das {
                         ss << " at " << missFn->at.describe();
                     }
                     ss << "\n";
-                    if ( missFn->name != name ) {
+                    if ( missFn->name != funcName ) {
                         ss << "\t\tname is similar, typo?\n";
                     }
                     if ( reportDetails ) {
@@ -1537,7 +1552,7 @@ namespace das {
                     auto visM = getFunctionVisModule(missFn);
                     bool isVisible = isVisibleFunc(inWhichModule,visM);
                     if ( !reportInvisibleFunctions  && !isVisible ) continue;
-                    bool isPrivate = missFn->privateFunction && !canCallPrivate(missFn,inWhichModule,program->thisModule.get());
+                    bool isPrivate = missFn->privateFunction && !canCallPrivate(missFn,inWhichModule,thisModule);
                     if ( !reportPrivateFunctions && isPrivate ) continue;
                     ss << "\t";
                     if ( missFn->module && !missFn->module->name.empty() && !(missFn->module->name=="$") )
@@ -1549,7 +1564,7 @@ namespace das {
                         ss << " at " << missFn->at.describe();
                     }
                     ss << "\n";
-                    if ( missFn->name != name ) {
+                    if ( missFn->name != funcName ) {
                         ss << "\t\tname is similar, typo?\n";
                     }
                     if ( reportDetails ) {
@@ -1607,7 +1622,7 @@ namespace das {
                     auto visM = getFunctionVisModule(missFn);
                     bool isVisible = isVisibleFunc(inWhichModule,visM);
                     if ( !reportInvisibleFunctions  && !isVisible ) continue;
-                    bool isPrivate = missFn->privateFunction && !canCallPrivate(missFn,inWhichModule,program->thisModule.get());
+                    bool isPrivate = missFn->privateFunction && !canCallPrivate(missFn,inWhichModule,thisModule);
                     if ( !reportPrivateFunctions && isPrivate ) continue;
                     ss << "\t";
                     if ( missFn->module && !missFn->module->name.empty() && !(missFn->module->name=="$") )
@@ -1681,7 +1696,7 @@ namespace das {
 
         MatchingFunctions findDefaultConstructor ( const string & sna ) const {
             vector<TypeDeclPtr> argDummy;
-            return findMatchingFunctions(program->thisModule->name, program->thisModule.get(), sna, argDummy); // "__::sna"
+            return findMatchingFunctions(thisModule->name, thisModule, sna, argDummy); // "__::sna"
         }
 
         bool hasDefaultUserConstructor ( const string & sna ) const {
@@ -1744,7 +1759,7 @@ namespace das {
 
         MatchingFunctions getCloneFunc ( const TypeDeclPtr & left, const TypeDeclPtr & right ) const {
             vector<TypeDeclPtr> argDummy = { left, right };
-            auto clones = findMatchingFunctions("*", program->thisModule.get(), "clone", argDummy); // "_::clone"
+            auto clones = findMatchingFunctions("*", thisModule, "clone", argDummy); // "_::clone"
             applyLSP(argDummy, clones);
             return clones;
         }
@@ -1755,7 +1770,7 @@ namespace das {
 
         MatchingFunctions getFinalizeFunc ( const TypeDeclPtr & subexpr ) const {
             vector<TypeDeclPtr> argDummy = { subexpr };
-            auto fins = findMatchingFunctions("*", program->thisModule.get(), "finalize", argDummy); // "_::finalize"
+            auto fins = findMatchingFunctions("*", thisModule, "finalize", argDummy); // "_::finalize"
             applyLSP(argDummy, fins);
             return fins;
         }
@@ -1907,7 +1922,7 @@ namespace das {
                     error("too many typeMacro " + tmn + " found",  "", "",
                         type->at, CompilationError::invalid_type);
                 } else {
-                    auto resType = tms[0]->visit(program,program->thisModule.get(), type, nullptr);
+                    auto resType = tms[0]->visit(program,thisModule, type, nullptr);
                     if ( !resType ) {
                         error("can't deduce typeMacro " + tmn,  "", "",
                             type->at, CompilationError::invalid_type);
@@ -2224,7 +2239,7 @@ namespace das {
                         var->genCtor = true;
                     }
                 } else {
-                    getOrCreateDummy(program->thisModule.get());
+                    getOrCreateDummy(thisModule);
                 }
             }
             auto tt = make_smart<TypeDecl>(Type::tStructure);
@@ -2524,7 +2539,11 @@ namespace das {
     // any expression
         virtual void preVisitExpression ( Expression * expr ) override {
             Visitor::preVisitExpression(expr);
-            expr->type.reset();
+            // WARNING - this is potentially dangerous. In theory type should be set to nada, and then re-inferred
+            // the reason not to reset it is that usually once inferred it should not change. but in some cases it can.
+            // even more rare is that it changed, and then no longer can be inferred. all those cases are pathological
+            // and should be avoided. but if you see a bug, this is the first place to look.
+            // expr->type.reset();
         }
     // const
         vec4f getEnumerationValue( ExprConstEnumeration * expr, bool & inferred ) const {
@@ -2646,14 +2665,13 @@ namespace das {
     // ExprReader
         virtual ExpressionPtr visit ( ExprReader * expr ) override {
             // implement reader macros
-            auto errc = ctx.thisProgram->errors.size();
-            auto thisModule = ctx.thisProgram->thisModule.get();
-            auto substitute = expr->macro->visit(ctx.thisProgram, thisModule, expr);
+            auto errc = program->errors.size();
+            auto substitute = expr->macro->visit(program, thisModule, expr);
             if ( substitute ) {
                 reportAstChanged();
                 return substitute;
             }
-            if ( errc==ctx.thisProgram->errors.size() ) {
+            if ( errc==program->errors.size() ) {
                 error("unsupported read macro " + expr->macro->name,  "", "",
                     expr->at, CompilationError::unsupported_read_macro);
             }
@@ -2704,13 +2722,13 @@ namespace das {
                 auto hFuncName = hash64z(funcName.c_str());
                 program->library.foreach([&](Module * mod) -> bool {
                     auto itFnList = mod->functionsByName.find(hFuncName);
-                    if ( itFnList != mod->functionsByName.end() ) {
+                    if ( itFnList ) {
                         auto & goodFunctions = itFnList->second;
                         for ( auto & missFn : goodFunctions ) {
                             auto visM = getFunctionVisModule(missFn);
                             bool isVisible = isVisibleFunc(inWhichModule,visM);
                             if ( !reportInvisibleFunctions  && !isVisible ) continue;
-                            bool isPrivate = missFn->privateFunction && !canCallPrivate(missFn,inWhichModule,program->thisModule.get());
+                            bool isPrivate = missFn->privateFunction && !canCallPrivate(missFn,inWhichModule,thisModule);
                             if ( !reportPrivateFunctions && isPrivate ) continue;
                             ss << "\t";
                             if ( missFn->module && !missFn->module->name.empty() && !(missFn->module->name=="$") )
@@ -2785,16 +2803,6 @@ namespace das {
                         expr->at, CompilationError::type_not_found);
                 }
                 fns = findTypedFuncAddr(expr->target, expr->funcType->argTypes);
-                if ( fns.size()==0 ) {
-                    string moduleName, funcName;
-                    splitTypeName(expr->target, moduleName, funcName);
-                    fns = findTypedFuncAddr(moduleName + "::`" + funcName, expr->funcType->argTypes);
-                    if ( fns.size()==1 && !fns.back()->fromGeneric ) {
-                        error("function not found " + expr->target,  "", "",
-                            expr->at, CompilationError::function_not_found);
-                        return Visitor::visit(expr);
-                    }
-                }
             } else {
                 fns = findFuncAddr(expr->target);
             }
@@ -2949,7 +2957,7 @@ namespace das {
                     expr->at, CompilationError::cant_dereference);
             } else {
                 TypeDecl::clone(expr->type,seT->firstType);
-                expr->type->constant |= expr->subexpr->type->constant | dvT->constant;
+                expr->type->constant |= expr->subexpr->type->constant || dvT->constant;
                 expr->type->ref = dvT->ref; // only ref if default value is ref
                 propagateTempType(expr->subexpr->type, expr->type); // t?# ?? def = #t
                 propagateAlwaysSafe(expr->subexpr);
@@ -5310,11 +5318,10 @@ namespace das {
             if (!expr->value->type || expr->value->type->isAliasOrExpr()) return Visitor::visit(expr);
             // implement variant macros
             ExpressionPtr substitute;
-            auto thisModule = ctx.thisProgram->thisModule.get();
             auto modMacro = [&](Module * mod) -> bool {
                 if ( thisModule->isVisibleDirectly(mod) && mod!=thisModule ) {
                     for ( const auto & pm : mod->variantMacros ) {
-                        if ( (substitute = pm->visitAs(ctx.thisProgram, thisModule, expr)) ) {
+                        if ( (substitute = pm->visitAs(program, thisModule, expr)) ) {
                             return false;
                         }
                     }
@@ -5322,7 +5329,7 @@ namespace das {
                 return true;
             };
             Module::foreach(modMacro);
-            if ( !substitute ) ctx.thisProgram->library.foreach(modMacro, "*");
+            if ( !substitute ) program->library.foreach(modMacro, "*");
             if ( substitute ) {
                 reportAstChanged();
                 return substitute;
@@ -5356,11 +5363,10 @@ namespace das {
             if (!expr->value->type || expr->value->type->isAliasOrExpr()) return Visitor::visit(expr);
             // implement variant macros
             ExpressionPtr substitute;
-            auto thisModule = ctx.thisProgram->thisModule.get();
             auto modMacro = [&](Module * mod) -> bool {
                 if ( thisModule->isVisibleDirectly(mod) && mod!=thisModule ) {
                     for ( const auto & pm : mod->variantMacros ) {
-                        if ( (substitute = pm->visitSafeAs(ctx.thisProgram, thisModule, expr)) ) {
+                        if ( (substitute = pm->visitSafeAs(program, thisModule, expr)) ) {
                             return false;
                         }
                     }
@@ -5368,7 +5374,7 @@ namespace das {
                 return true;
             };
             Module::foreach(modMacro);
-            if ( !substitute ) ctx.thisProgram->library.foreach(modMacro, "*");
+            if ( !substitute ) program->library.foreach(modMacro, "*");
             if ( substitute ) {
                 reportAstChanged();
                 return substitute;
@@ -5414,11 +5420,10 @@ namespace das {
             if (!expr->value->type || expr->value->type->isAliasOrExpr()) return Visitor::visit(expr);
             // implement variant macros
             ExpressionPtr substitute;
-            auto thisModule = ctx.thisProgram->thisModule.get();
             auto modMacro = [&](Module * mod) -> bool {
                 if ( thisModule->isVisibleDirectly(mod) && mod!=thisModule ) {
                     for ( const auto & pm : mod->variantMacros ) {
-                        if ( (substitute = pm->visitIs(ctx.thisProgram, thisModule, expr)) ) {
+                        if ( (substitute = pm->visitIs(program, thisModule, expr)) ) {
                             return false;
                         }
                     }
@@ -5426,7 +5431,7 @@ namespace das {
                 return true;
             };
             Module::foreach(modMacro);
-            if ( !substitute ) ctx.thisProgram->library.foreach(modMacro, "*");
+            if ( !substitute ) program->library.foreach(modMacro, "*");
             if ( substitute ) {
                 reportAstChanged();
                 return substitute;
@@ -5769,7 +5774,7 @@ namespace das {
             if ( valT->isGoodVariantType() || valT->firstType->isGoodVariantType() ) {
                 int index = valT->variantFieldIndex(expr->name);
                 auto argSize = valT->isGoodVariantType() ? valT->argTypes.size() : valT->firstType->argTypes.size();
-                if ( index==-1 || index>=argSize ) {
+                if ( index==-1 || index>=static_cast<int>(argSize) ) {
                     error("can't get variant field '" + expr->name + "'", "", "",
                         expr->at, CompilationError::cant_get_field);
                     return Visitor::visit(expr);
@@ -5830,7 +5835,6 @@ namespace das {
             splitTypeName(name, moduleName, varName);
             vector<VariablePtr> result;
             auto inWhichModule = getSearchModule(moduleName);
-            auto thisModule = program->thisModule.get();
             program->library.foreach([&](Module * mod) -> bool {
                 if ( auto var = mod->findVariable(varName) ) {
                     if ( inWhichModule->isVisibleDirectly(var->module) ) {
@@ -7206,6 +7210,10 @@ namespace das {
                         pVar->type->dimExpr.erase(pVar->type->dimExpr.begin());
                     }
                 } else if ( src->type->isGoodIteratorType() ) {
+                    if (src->type->isConst()) {
+                        error("can't iterate over const iterator", "", "",
+                            expr->at, CompilationError::invalid_iteration_source);
+                    }
                     pVar->type = make_smart<TypeDecl>(*src->type->firstType);
                 } else if ( src->type->isGoodArrayType() ) {
                     pVar->type = make_smart<TypeDecl>(*src->type->firstType);
@@ -7317,11 +7325,10 @@ namespace das {
             }
             // implement for loop macro
             ExpressionPtr substitute;
-            auto thisModule = ctx.thisProgram->thisModule.get();
             auto modMacro = [&](Module * mod) -> bool {
                 if ( thisModule->isVisibleDirectly(mod) && mod!=thisModule ) {
                     for ( const auto & pm : mod->forLoopMacros ) {
-                        if ( (substitute = pm->visit(ctx.thisProgram, thisModule, expr)) ) {
+                        if ( (substitute = pm->visit(program, thisModule, expr)) ) {
                             return false;
                         }
                     }
@@ -7329,7 +7336,7 @@ namespace das {
                 return true;
             };
             Module::foreach(modMacro);
-            if ( !substitute ) ctx.thisProgram->library.foreach(modMacro, "*");
+            if ( !substitute ) program->library.foreach(modMacro, "*");
             if ( substitute ) {
                 reportAstChanged();
                 return substitute;
@@ -7691,21 +7698,19 @@ namespace das {
         }
     // ExprCallMacro
         virtual void preVisit ( ExprCallMacro * expr ) override {
-            auto thisModule = ctx.thisProgram->thisModule.get();
             expr->inFunction = func.get();
             canFoldResult = expr->macro->canFoldReturnResult(expr) && canFoldResult;
-            expr->macro->preVisit(ctx.thisProgram, thisModule, expr); // pre-visit is allowed to do nothing and not report errors.
+            expr->macro->preVisit(program, thisModule, expr); // pre-visit is allowed to do nothing and not report errors.
             return Visitor::preVisit(expr);
         }
         virtual ExpressionPtr visit ( ExprCallMacro * expr ) override {
-            auto errc = ctx.thisProgram->errors.size();
-            auto thisModule = ctx.thisProgram->thisModule.get();
-            auto substitute = expr->macro->visit(ctx.thisProgram, thisModule, expr);
+            auto errc = program->errors.size();
+            auto substitute = expr->macro->visit(program, thisModule, expr);
             if ( substitute ) {
                 reportAstChanged();
                 return substitute;
             }
-            if ( errc==ctx.thisProgram->errors.size() ) {   // this fail safe adds error if macro failed, but did not report any errors
+            if ( errc==program->errors.size() ) {   // this fail safe adds error if macro failed, but did not report any errors
                 error("call macro '" + expr->macro->name + "' failed to compile",  "possibly missing require", "",
                     expr->at, CompilationError::unsupported_call_macro);
             }
@@ -7877,7 +7882,7 @@ namespace das {
                             TextWriter ss;
                             ss << cls->module->name << "::" << cls->name << " has method " << expr->name << ", did you mean ";
                             ss << *(expr->arguments[0]) << "->" << expr->name << "(";
-                            for ( auto i=1; i<expr->arguments.size(); ++i ) {
+                            for ( size_t i=1; i<expr->arguments.size(); ++i ) {
                                 if ( i>1 ) ss << ", ";
                                 ss << *(expr->arguments[i]);
                             }
@@ -8386,14 +8391,14 @@ namespace das {
             return true;
         }
 
-        FunctionPtr inferFunctionCall ( ExprLooksLikeCall * expr, InferCallError cerr=InferCallError::functionOrGeneric, Function * lookupFunction = nullptr, bool failOnMissingCtor = true ) {
+        FunctionPtr inferFunctionCall ( ExprLooksLikeCall * expr, InferCallError cerr=InferCallError::functionOrGeneric, Function * lookupFunction = nullptr, bool failOnMissingCtor = true, bool visCheck = true ) {
             vector<TypeDeclPtr> types;
             if (!inferArguments(types, expr->arguments)) {
                 return nullptr;
             }
             MatchingFunctions functions, generics;
             if ( !lookupFunction ) {
-                findMatchingFunctionsAndGenerics(functions, generics, expr->name, types, true);
+                findMatchingFunctionsAndGenerics(functions, generics, expr->name, types, true, visCheck);
                 applyLSP(types,functions);
             } else {
                 functions.push_back(lookupFunction);
@@ -8479,7 +8484,7 @@ namespace das {
                 if ( generics.size()==1 ) {
                     auto oneGeneric = generics.back();
                     auto genName = getGenericInstanceName(oneGeneric);
-                    auto instancedFunctions = findMatchingFunctions(program->thisModule->name, program->thisModule.get(), genName, types, true); // "__::genName"
+                    auto instancedFunctions = findMatchingFunctions(program->thisModule->name, thisModule, genName, types, true); // "__::genName"
                     if ( instancedFunctions.size() > 1 ) {
                         TextWriter ss;
                         for ( auto & instFn : instancedFunctions ) {
@@ -8581,8 +8586,8 @@ namespace das {
                         program->updateAliasMapCallback = nullptr;
                         // now we verify if tail end can indeed be fully inferred
                         if (!program->addFunction(clone)) {
-                            clone->module = program->thisModule.get();
-                            auto exf = program->thisModule->functions.find(clone->getMangledName());
+                            clone->module = thisModule;
+                            auto exf = thisModule->functions.find(clone->getMangledName());
                             clone->module = nullptr;
                             DAS_ASSERTF(exf, "if we can't add, this means there is function with exactly this mangled name");
                             if (exf->fromGeneric != clone->fromGeneric) { // TODO: getOrigin??
@@ -8625,8 +8630,11 @@ namespace das {
                         } else if ( aliasT->isStructure() ) {
                             if ( expr->arguments.size()==0 ) {
                                 expr->name = aliasT->structType->name;
-                                bool isPrivate = aliasT->structType->privateStructure || aliasT->structType->module != program->thisModule.get();
-                                if ( !tryMakeStructureCtor (aliasT->structType, isPrivate, true) ) {
+                                bool isPrivate = aliasT->structType->privateStructure;
+                                if ( isPrivate && aliasT->structType->module != thisModule ) {
+                                    error("can't access private structure " + aliasT->structType->name, "", "",
+                                        expr->at, CompilationError::function_not_found);
+                                } else if ( !tryMakeStructureCtor (aliasT->structType, true, true) ) {
                                     if ( failOnMissingCtor ) {
                                         error("default constructor " + aliasT->structType->name + " is not visible directly",
                                             "try default<" + expr->name + "> instead", "", expr->at, CompilationError::function_not_found);
@@ -8968,6 +8976,52 @@ namespace das {
             return Visitor::visit(expr);
         }
     // make structure
+        void describeLocalType ( vector<string> & results, TypeDecl * tp, const string & prefix, das_set<Structure *> & dep ) const {
+            if ( tp->baseType==Type::tHandle ) {
+                if ( !tp->annotation->isLocal() ) {
+                    results.push_back(prefix + " : " + tp->describe());
+                }
+            } else  if ( tp->baseType==Type::tStructure ) {
+                if ( tp->structType ) {
+                    if (dep.find(tp->structType) != dep.end()) return;
+                    dep.insert(tp->structType);
+                    for ( auto & field : tp->structType->fields ) {
+                        describeLocalType(results, field.type.get(), prefix + "." + field.name, dep);
+                    }
+                }
+            } else if ( tp->baseType==Type::tTuple || tp->baseType==Type::tVariant || tp->baseType == Type::option ) {
+                int argIndex = 0;
+                for ( const auto & arg : tp->argTypes ) {
+                    if ( tp->argNames.size() ) {
+                        describeLocalType(results, arg.get(), prefix + "." + tp->argNames[argIndex], dep);
+                    } else {
+                        describeLocalType(results, arg.get(), prefix + "." + to_string(argIndex), dep);
+                    }
+                    argIndex ++;
+                }
+            } else if ( tp->baseType==Type::tArray || tp->baseType==Type::tTable ) {
+                if ( tp->firstType ) {
+                    describeLocalType(results, tp->firstType.get(), prefix + "[]", dep);
+                }
+                if ( tp->secondType ) {
+                    describeLocalType(results, tp->secondType.get(), prefix + "[]", dep);
+                }
+            }
+        }
+        string describeLocalType ( TypeDecl * tp ) const {
+            if ( verbose ) {
+                das_set<Structure *> dep;
+                vector<string> results;
+                describeLocalType(results, tp, "type<" + tp->describe() + ">", dep);
+                TextWriter tw;
+                for ( auto & res : results ) {
+                    tw << "\t" << res << " is not a local type\n";
+                }
+                return tw.str();
+            } else {
+                return "";
+            }
+        }
         virtual void preVisit ( ExprMakeStruct * expr ) override {
             Visitor::preVisit(expr);
             if ( expr->makeType && expr->makeType->isExprType() ) {
@@ -8992,8 +9046,16 @@ namespace das {
                 error("[[" + describeType(expr->makeType) + "]] struct can't be reference", "", "",
                     expr->at, CompilationError::invalid_type);
             } else if ( !expr->makeType->isLocal() && !expr->isNewHandle ) {
-                error("[[" + describeType(expr->makeType) + "]] struct can`t be allocated locally (on the stack), since Handled type isLocal() returned false. Allocate it on the heap (new [[...]]) or modify your C++ bindings.", "", "",
-                    expr->at, CompilationError::invalid_type);
+                if ( expr->makeType->isClass() ) {
+                    error("Class '" + expr->makeType->structType->name + "' has fields, which can't be allocated locally, which is not allowed. "
+                        "It contains Handled type, where isLocal() returned false.", describeLocalType(expr->makeType.get()), "",
+                        expr->at, CompilationError::invalid_type);
+                } else {
+                    error(describeType(expr->makeType) + "() can`t be allocated locally (on the stack or as part of other data structure), which is not allowed. "
+                        "It contains Handled type, where isLocal() returned false. "
+                        "Allocate it on the heap (new [[...]]) or modify your C++ bindings.", describeLocalType(expr->makeType.get()), "",
+                        expr->at, CompilationError::invalid_type);
+                }
             } else if ( expr->makeType->baseType==Type::tHandle && expr->isNewHandle && !expr->useInitializer ) {
                 error("'new [[" + describeType(expr->makeType) + "]]' struct requires initializer syntax", "",
                         "use 'new [[" + describeType(expr->makeType) + "()]]' instead",
@@ -9176,6 +9238,10 @@ namespace das {
             if ( expr->makeType && expr->makeType->isExprType() ) {
                 return Visitor::visit(expr);
             }
+            if ( expr->ignoreVisCheck && !safeExpression(expr) ) {
+                error("ignoring visibility check on structure initialization requires unsafe", "", "",
+                    expr->at, CompilationError::unsafe);
+            }
             if ( expr->makeType && expr->makeType->isAlias() ) {
                 if ( auto aT = inferAlias(expr->makeType) ) {
                     expr->makeType = aT;
@@ -9193,10 +9259,10 @@ namespace das {
                 // auto ctorName = st->module->name  + "::" + st->name;
                 auto ctorName = st->module->name  + "::" + st->name;
                 auto tempCall = make_smart<ExprLooksLikeCall>(expr->at,ctorName);
-                expr->constructor = inferFunctionCall(tempCall.get(),InferCallError::functionOrGeneric, nullptr, false).get();
+                expr->constructor = inferFunctionCall(tempCall.get(),InferCallError::functionOrGeneric, nullptr, false, !expr->ignoreVisCheck).get();
                 if ( !expr->constructor ) {
                   tempCall->name = "__::" + st->name;
-                  expr->constructor = inferFunctionCall(tempCall.get(),InferCallError::functionOrGeneric, nullptr, false).get();
+                  expr->constructor = inferFunctionCall(tempCall.get(),InferCallError::functionOrGeneric, nullptr, false, !expr->ignoreVisCheck).get();
                 }
                 if ( !expr->constructor ) {
                     error("class constructor can't be inferred " + describeType(expr->makeType),
@@ -9941,7 +10007,7 @@ namespace das {
                 auto mnh = fn->getMangledNameHash();
                 if ( hash != mnh ) {
                     refreshFunctions.emplace_back(make_tuple(fn.get(), hash, mnh));
-                    { AstFuncLookup dummy; swap(fn->lookup,dummy); }    // invalidate lookup hash, something changed
+                    fn->lookup.clear();
                 }
             });
             for ( auto rfn : refreshFunctions ) {

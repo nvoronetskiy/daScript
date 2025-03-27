@@ -76,6 +76,11 @@ namespace das {
         }
     }
 
+    void Module::setModuleName ( const string & n ) {
+        name = n;
+        nameHash = hash64z(n.c_str());
+    }
+
     void Module::addBuiltinDependency ( ModuleLibrary & lib, Module * m, bool pub ) {
         lib.addModule(m);
         requireModule[m] = pub;
@@ -225,7 +230,8 @@ namespace das {
         return optT;
     }
 
-    Module::Module ( const string & n ) : name(n) {
+    Module::Module ( const string & n ) {
+        setModuleName(n);
         if ( !name.empty() ) {
             auto first = daScriptEnvironment::bound->modules;
             while (first != nullptr)
@@ -518,9 +524,13 @@ namespace das {
 
     FunctionPtr Module::findUniqueFunction ( const string & mangledName ) const {
         auto it = functionsByName.find(hash64z(mangledName.c_str()));
-        if ( it==functionsByName.end() ) return nullptr;
+        if ( !it ) return nullptr;
         if ( it->second.size()!=1 ) return nullptr;
         return it->second[0];
+    }
+
+    StructurePtr Module::findStructureByMangledNameHash ( uint64_t hash ) const {
+        return structures.find(hash);
     }
 
     StructurePtr Module::findStructure ( const string & na ) const {
@@ -539,6 +549,10 @@ namespace das {
     TypeInfoMacroPtr Module::findTypeInfoMacro ( const string & na ) const {
         auto it = typeInfoMacros.find(na);
         return it != typeInfoMacros.end() ? it->second : nullptr;
+    }
+
+    EnumerationPtr Module::findEnumByMangledNameHash ( uint64_t hash ) const {
+        return enumerations.find(hash);
     }
 
     EnumerationPtr Module::findEnum ( const string & na ) const {
@@ -751,18 +765,29 @@ namespace das {
         }
     }
 
+    string Module::getNamespace() const {
+        return "_anon_" + to_string(hash_blockz64((uint8_t *)fileName.c_str()));
+    }
+
     // MODULE LIBRARY
 
-    ModuleLibrary::ModuleLibrary( Module * this_module )
-    {
+    ModuleLibrary::ModuleLibrary( Module * this_module ) {
         addModule(this_module);
     }
 
     void ModuleLibrary::addBuiltInModule () {
         Module * module = Module::require("$");
         DAS_ASSERTF(module, "builtin module not found? or you have forgotten to NEED_MODULE(Module_BuiltIn) be called first");
-        if (module)
-            addModule(module);
+        if (module) addModule(module);
+    }
+
+    void ModuleLibrary::renameModule ( Module * module, const string & newName ) {
+        auto oldHashLookup = moduleLookupByHash.find(module->nameHash);
+        DAS_VERIFYF(oldHashLookup!=moduleLookupByHash.end(), "module %s not found", module->name.c_str());
+        moduleLookupByHash.erase(oldHashLookup);
+        module->setModuleName(newName);
+        DAS_VERIFYF(moduleLookupByHash.find(module->nameHash)==moduleLookupByHash.end(), "duplicate module hash %s", module->name.c_str());
+        moduleLookupByHash[module->nameHash] = module;
     }
 
     bool ModuleLibrary::addModule ( Module * module ) {
@@ -770,19 +795,14 @@ namespace das {
         if ( module ) {
             thisModule = thisModule ? thisModule : module;
             if ( find(modules.begin(),modules.end(),module)==modules.end() ) {
-                if ( !module->requireModule.empty() ) {
-                    for ( auto dep : module->requireModule ) {
-                        if ( dep.first != module ) {
-                            addModule ( dep.first );
-                        }
-                    }
-                }
                 for ( auto dep : module->requireModule ) {
                     if ( dep.first != module ) {
                         addModule ( dep.first );
                     }
                 }
                 modules.push_back(module);
+                DAS_VERIFYF(moduleLookupByHash.find(module->nameHash)==moduleLookupByHash.end(), "duplicate module hash %s", module->name.c_str());
+                moduleLookupByHash[module->nameHash] = module;
                 module->addPrerequisits(*this);
                 return true;
             }
@@ -796,13 +816,9 @@ namespace das {
             for ( auto pm : modules ) {
                 if ( !func(pm) ) break;
             }
-
         } else {
-            for ( auto pm : modules ) {
-                if ( pm->name==moduleName ) {
-                    func(pm);
-                    break;
-                }
+            if ( auto pm = findModule(moduleName) ) {
+                func(pm);
             }
         }
     }
@@ -817,11 +833,15 @@ namespace das {
         func(thisM);
     }
 
+    Module * ModuleLibrary::findModuleByMangledNameHash ( uint64_t hash ) const {
+        auto it = moduleLookupByHash.find(hash);
+        return it != moduleLookupByHash.end() ? it->second : nullptr;
+    }
+
     Module * ModuleLibrary::findModule ( const string & mn ) const {
-        auto it = find_if(modules.begin(), modules.end(), [&](Module * mod){
-            return mod->name == mn;
-        });
-        return it!=modules.end() ? *it : nullptr;
+        auto hash = hash64z(mn.c_str());
+        auto it = moduleLookupByHash.find(hash);
+        return it != moduleLookupByHash.end() ? it->second : nullptr;
     }
 
     void ModuleLibrary::findWithCallback ( const string & name, Module * inWhichModule, const callable<void (Module * pm, const string &name, Module * inWhichModule)> & func ) const {
@@ -1031,6 +1051,7 @@ namespace das {
             }
         }
         modules.clear();
+        moduleLookupByHash.clear();
     }
 
     // Module group
