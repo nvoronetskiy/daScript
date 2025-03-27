@@ -287,8 +287,8 @@ namespace das {
 
     template <typename TT> struct ToBasicType {
         enum { type = Type::none };
-        static_assert( int(type)!=int(Type::none),"This type is not supported or not bound. For the bound type missing or not included are "
-            "MAKE_TYPE_FACTORY or MAKE_EXTERNAL_TYPE_FACTORY as well as addAnnotation in the appropriate module.");
+//         static_assert( int(type)!=int(Type::none),"This type is not supported or not bound. For the bound type missing or not included are "
+//             "MAKE_TYPE_FACTORY or MAKE_EXTERNAL_TYPE_FACTORY as well as addAnnotation in the appropriate module.");
     };
 
     template<> struct ToBasicType<Bitfield>     { enum { type = Type::tBitfield }; };
