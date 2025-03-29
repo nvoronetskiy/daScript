@@ -325,8 +325,10 @@ namespace das {
     template<> struct ToBasicType<long double>      { enum { type = Type::tDouble }; };
     template<> struct ToBasicType<wchar_t>          { enum { type = Type::tUInt16 }; };
 #endif
-#if defined(__ANDROID__) && !defined(__aarch64__)
+#if defined(__ANDROID__)
+#if (LONG_MAX !=LLONG_MAX )
     template<> struct ToBasicType<long>             { enum { type = Type::tInt }; };
+#endif
     template<> struct ToBasicType<long double>      { enum { type = Type::tDouble }; };
     template<> struct ToBasicType<wchar_t>          { enum { type = Type::tUInt16 }; };
 #endif
