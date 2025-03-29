@@ -288,8 +288,8 @@ namespace das {
 
     template <typename TT> struct ToBasicType {
         enum { type = Type::none };
-        static_assert( int(type)!=int(Type::none),"This type is not supported or not bound. For the bound type missing or not included are "
-            "MAKE_TYPE_FACTORY or MAKE_EXTERNAL_TYPE_FACTORY as well as addAnnotation in the appropriate module.");
+//         static_assert( int(type)!=int(Type::none),"This type is not supported or not bound. For the bound type missing or not included are "
+//             "MAKE_TYPE_FACTORY or MAKE_EXTERNAL_TYPE_FACTORY as well as addAnnotation in the appropriate module.");
     };
 
     template<> struct ToBasicType<Bitfield>     { enum { type = Type::tBitfield }; };
@@ -326,8 +326,10 @@ namespace das {
     template<> struct ToBasicType<long double>      { enum { type = Type::tDouble }; };
     template<> struct ToBasicType<wchar_t>          { enum { type = Type::tUInt16 }; };
 #endif
-#if defined(__ANDROID__) && !defined(__aarch64__)
+#if defined(__ANDROID__)
+#if (LONG_MAX !=LLONG_MAX )
     template<> struct ToBasicType<long>             { enum { type = Type::tInt }; };
+#endif
     template<> struct ToBasicType<long double>      { enum { type = Type::tDouble }; };
     template<> struct ToBasicType<wchar_t>          { enum { type = Type::tUInt16 }; };
 #endif

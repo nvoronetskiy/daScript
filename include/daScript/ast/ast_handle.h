@@ -81,7 +81,8 @@ namespace das
             __forceinline void adjustAot ( const char * pref, const char * postf ) { aotPrefix=pref; aotPostfix=postf; }
         };
         BasicStructureAnnotation(const string & n, const string & cpn, ModuleLibrary * l)
-            : TypeAnnotation(n,cpn), mlib(l) {
+            : TypeAnnotation(n,cpn){
+            mlib = l;
             mlib->getThisModule()->registerAnnotation(this);
         }
         virtual uint64_t getOwnSemanticHash ( HashBuilder & hb, das_set<Structure *> &, das_set<Annotation *> & ) const override;
