@@ -1,5 +1,7 @@
 #pragma once
 
+#include <common/type_name_ct.h>
+
 #include "daScript/misc/vectypes.h"
 #include "daScript/misc/arraytype.h"
 #include "daScript/misc/rangetype.h"
@@ -7,7 +9,10 @@
 namespace das {
 
     template <typename TT>
-    struct typeName;
+    struct typeName
+    {
+        constexpr static const char* name() { return  type_name<TT>().c_str(); }
+    };
 
     template <typename TT> struct typeName<const TT> : typeName<TT> {};
 

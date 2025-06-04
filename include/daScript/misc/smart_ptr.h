@@ -454,7 +454,7 @@ namespace das {
     struct smart_ptr_hash {
         template<typename TT>
         size_t operator() ( const das::smart_ptr<TT> & k ) const {
-            return hash<void *>()(k.get());
+            return das::hash<void *>()(k.get());
         }
     };
 }

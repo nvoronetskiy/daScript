@@ -1,7 +1,7 @@
 cmake_minimum_required (VERSION 3.16)
 project (DAS)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(DAS_FLEX_BISON_DISABLED "Disable FLEX/BISON stage" ON)
@@ -32,7 +32,7 @@ add_link_options(-fwasm-exceptions)
 add_compile_definitions(DAS_ENABLE_EXCEPTIONS)
 add_compile_definitions(_EMSCRIPTEN_VER)
 
-set(CMAKE_CXX_FLAGS "-s TOTAL_MEMORY=128MB")
+#set(CMAKE_CXX_FLAGS "-s TOTAL_MEMORY=128MB")
 
 INCLUDE(../CMakeCommon.txt)
 

@@ -289,8 +289,8 @@ namespace das {
 
     template <typename TT> struct ToBasicType {
         enum { type = Type::none };
-        static_assert( int(type)!=int(Type::none),"This type is not supported or not bound. For the bound type missing or not included are "
-            "MAKE_TYPE_FACTORY or MAKE_EXTERNAL_TYPE_FACTORY as well as addAnnotation in the appropriate module.");
+//         static_assert( int(type)!=int(Type::none),"This type is not supported or not bound. For the bound type missing or not included are "
+//             "MAKE_TYPE_FACTORY or MAKE_EXTERNAL_TYPE_FACTORY as well as addAnnotation in the appropriate module.");
     };
 
     template<> struct ToBasicType<Bitfield>     { enum { type = Type::tBitfield }; };
@@ -327,7 +327,14 @@ namespace das {
     template<> struct ToBasicType<long double>      { enum { type = Type::tDouble }; };
     template<> struct ToBasicType<wchar_t>          { enum { type = Type::tUInt16 }; };
 #endif
-#if !defined(_MSC_VER) && !defined(__APPLE__) && !defined(_EMSCRIPTEN_VER) && defined(ULLONG_MAX) && ULLONG_MAX == 0xffffffffffffffffULL
+#if defined(__ANDROID__)
+#if (LONG_MAX !=LLONG_MAX )
+    template<> struct ToBasicType<long>             { enum { type = Type::tInt }; };
+#endif
+    template<> struct ToBasicType<long double>      { enum { type = Type::tDouble }; };
+    template<> struct ToBasicType<wchar_t>          { enum { type = Type::tUInt16 }; };
+#endif
+#if !defined(_MSC_VER) && !defined(__APPLE__) && !defined(_EMSCRIPTEN_VER) && !defined(__ANDROID__) && defined(ULLONG_MAX) && ULLONG_MAX == 0xffffffffffffffffULL
     template<> struct ToBasicType<long long int>      { enum { type = Type::tInt64 }; };
     template<> struct ToBasicType<unsigned long long int>     { enum { type = Type::tUInt64 }; };
 #endif
@@ -638,14 +645,21 @@ namespace das {
         }
     };
 
-    template <typename TT>
-    __forceinline TypeDeclPtr makeType(const ModuleLibrary & ctx) {
-        return typeFactory<TT>::make(ctx);
+    template <typename TT, typename ModLib>
+    __forceinline TypeDeclPtr makeType(const ModLib& ctx) {
+        if constexpr (requires{ ModLib::template make_type<TT>(ctx); } && !std::is_same_v<TT, void>)
+        {
+            return ModLib::template make_type<TT>(ctx);
+        }
+        else
+        {
+            return typeFactory<TT>::make(ctx);
+        }
     }
 
-    template <typename TT>
-    ___noinline TypeDeclPtr makeArgumentType(const ModuleLibrary & ctx) {
-        auto tt = typeFactory<TT>::make(ctx);
+    template <typename TT, typename ModLib>
+    ___noinline TypeDeclPtr makeArgumentType(const ModLib & ctx) {
+        auto tt = makeType<TT>(ctx);
         if (tt->isRefType()) {
             tt->ref = false;
         } else if (!tt->isRef() && !tt->isAnyType()) {
