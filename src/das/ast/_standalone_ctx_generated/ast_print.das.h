@@ -1,4 +1,6 @@
 namespace das {
+class StringBuilderWriter;
+
 namespace ast_print {
 
 
