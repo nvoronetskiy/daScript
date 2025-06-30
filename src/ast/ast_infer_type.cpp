@@ -3253,6 +3253,10 @@ namespace das {
                         error("implicit capture by move requires unsafe, while capturing " + cV->name,  "", "",
                             at, CompilationError::invalid_capture);
                         return false;
+                    } else if ( !cV->type->canCopy() && cV->type->isConst() ) {
+                        error("can't implicitly capture constant variable " + cV->name + " by move",  "", "",
+                            at, CompilationError::invalid_capture);
+                        return false;
                     }
                 } else if ( mode == CaptureMode::capture_by_reference ) {
                     if ( !cV->capture_as_ref && isUnsafe ) {
@@ -3263,6 +3267,10 @@ namespace das {
                 } else if ( mode == CaptureMode::capture_by_move ) {
                     if ( !cV->type->canMove() ) {
                         error("can't move captured variable " + cV->name,  "", "",
+                            at, CompilationError::invalid_capture);
+                        return false;
+                    } else if ( cV->type->isConst() ) {
+                        error("can't capture constant variable " + cV->name + " by move",  "", "",
                             at, CompilationError::invalid_capture);
                         return false;
                     }
@@ -6575,6 +6583,26 @@ namespace das {
                         expr->left = propGet;
                         return expr;
                     }
+                    if ( expr->right->type->isBool() && efield->value->type && efield->value->type->isBitfield() ) { // bitfield.field = bool
+                        auto value = efield->value;
+                        if ( value->rtti_isR2V() ) {
+                            value = static_pointer_cast<ExprRef2Value>(value)->subexpr;
+                        }
+                        if ( value->type->ref ) {
+                            // lets find the right field
+                            auto fidx = efield->value->type->bitFieldIndex(efield->name);
+                            if ( fidx != -1 ) {
+                                reportAstChanged();
+                                auto mask = make_smart<ExprConstBitfield>(efield->at,1u<<fidx);
+                                mask->bitfieldType = make_smart<TypeDecl>(*efield->value->type);
+                                auto call = make_smart<ExprCall>(efield->at, "__bit_set");
+                                call->arguments.push_back(value->clone());
+                                call->arguments.push_back(mask);
+                                call->arguments.push_back(expr->right->clone());
+                                return call;
+                            }
+                        }
+                    }
                 }
             }
             return nullptr;
@@ -6587,19 +6615,17 @@ namespace das {
             if ( !expr->left->type || !expr->right->type ) {
                 return Visitor::visit(expr);
             }
-            // lets see if there is clone operator already (a user operator can ignore all the rules bellow)
-            auto fnList = getCloneFunc(expr->left->type, expr->right->type);
-            if ( fnList.size() ) {
-                if ( verifyCloneFunc(fnList, expr->at) ) {
-                    reportAstChanged();
-                    string cloneName = "_::clone";
-                    auto cloneFn = make_smart<ExprCall>(expr->at, cloneName);
-                    cloneFn->arguments.push_back(expr->left->clone());
-                    cloneFn->arguments.push_back(expr->right->clone());
-                    return cloneFn;
-                } else {
-                    return Visitor::visit(expr);
-                }
+            // lets infer clone call (and instance generic if need be)
+            auto opName = "_::clone";
+            auto tempCall = make_smart<ExprLooksLikeCall>(expr->at,opName);
+            tempCall->arguments.push_back(expr->left);
+            tempCall->arguments.push_back(expr->right);
+            expr->func = inferFunctionCall(tempCall.get(),InferCallError::tryOperator).get();
+            if ( expr->func || opName != tempCall->name ) {   // this happens when the clone gets instanced
+                reportAstChanged();
+                auto opCall = make_smart<ExprCall>(expr->at, tempCall->name);
+                opCall->arguments = das::move(tempCall->arguments);
+                return opCall;
             }
             // infer
             if ( !isSameSmartPtrType(expr->left->type,expr->right->type,true) ) {
@@ -6609,7 +6635,7 @@ namespace das {
                 error("can only clone to a reference", "", "",
                     expr->at, CompilationError::cant_write_to_non_reference);
             } else if ( expr->left->type->constant ) {
-                error("can't write to a constant value", "", "",
+                error("can't write to a constant value " + expr->left->describe(), "", "",
                     expr->at, CompilationError::cant_write_to_const);
             } else if ( !expr->left->type->canClone() ) {
                 reportCantClone("type " + describeType(expr->left->type) + " can't be cloned from " + describeType(expr->right->type),
@@ -6653,7 +6679,7 @@ namespace das {
                 } else if ( cloneType->isStructure() ) {
                     reportAstChanged();
                     auto stt = cloneType->structType;
-                    fnList = getCloneFunc(cloneType,cloneType);
+                    auto fnList = getCloneFunc(cloneType,cloneType);
                     if ( verifyCloneFunc(fnList, expr->at) ) {
                         if ( fnList.size()==0 ) {
                             auto clf = makeClone(stt);
@@ -6669,7 +6695,7 @@ namespace das {
                     }
                 } else if ( cloneType->isTuple() ) {
                     reportAstChanged();
-                    fnList = getCloneFunc(cloneType,cloneType);
+                    auto fnList = getCloneFunc(cloneType,cloneType);
                     if ( verifyCloneFunc(fnList, expr->at) ) {
                         if ( fnList.size()==0 ) {
                             auto clf = makeCloneTuple(expr->at, cloneType);
@@ -6685,7 +6711,7 @@ namespace das {
                     }
                 } else if ( cloneType->isVariant() ) {
                     reportAstChanged();
-                    fnList = getCloneFunc(cloneType,cloneType);
+                    auto fnList = getCloneFunc(cloneType,cloneType);
                     if ( verifyCloneFunc(fnList, expr->at) ) {
                         if ( fnList.size()==0 ) {
                             auto clf = makeCloneVariant(expr->at, cloneType);
@@ -8825,6 +8851,18 @@ namespace das {
             return nullptr;
         }
 
+        bool isCloneArrayExpression ( ExprCall * expr ) const {
+            if ( !expr->func ) return false;
+            if ( expr->arguments.size() != 2 ) return false;
+            if ( !(expr->func->name=="clone" || (expr->func->fromGeneric && expr->func->fromGeneric->name=="clone"))  ) return false;
+            if ( !expr->arguments[1]->rtti_isCall() ) return false;
+            auto call = (ExprCall *)(expr->arguments[1].get());
+            if ( !call->func ) return false;
+            if ( !call->func->fromGeneric ) return false;
+            if ( !(call->func->fromGeneric->name=="to_array_move" && call->func->fromGeneric->module->name=="$") ) return false;
+            return true;
+        }
+
         virtual ExpressionPtr visit ( ExprCall * expr ) override {
             if (expr->argumentsFailedToInfer) return Visitor::visit(expr);
             expr->func = inferFunctionCall(expr, InferCallError::functionOrGeneric, expr->genericFunction ? expr->func : nullptr).get();
@@ -8942,6 +8980,9 @@ namespace das {
                     expr->at, CompilationError::unsafe);
             } else if ( expr->func && expr->func->unsafeOutsideOfFor && !(expr->isForLoopSource || safeExpression(expr)) ) {
                 error("'" + expr->name + "' is unsafe, when not source of the for-loop; must be inside the 'unsafe' block", "", "",
+                    expr->at, CompilationError::unsafe);
+            } else if ( expr->func && expr->func->unsafeWhenNotCloneArray && !(safeExpression(expr) || isCloneArrayExpression(expr))) {
+                error("'" + expr->name + "' is unsafe, when not clone array; must be inside the 'unsafe' block", "", "",
                     expr->at, CompilationError::unsafe);
             } else if (enableInferTimeFolding && expr->func && isConstExprFunc(expr->func)) {
                 vector<ExpressionPtr> cargs; cargs.reserve(expr->arguments.size());
@@ -9177,7 +9218,15 @@ namespace das {
             auto mkb = static_pointer_cast<ExprMakeBlock>(expr->block);
             DAS_ASSERT(mkb->block->rtti_isBlock());
             auto blk = static_pointer_cast<ExprBlock>(mkb->block);
-            auto cle = convertToCloneExpr(expr,index,decl);
+            bool ignoreCapturedConstant = false;
+            if ( expr->makeType->baseType == Type::tStructure ) {
+                if ( auto field = expr->makeType->structType->findField(decl->name) ) {
+                    if ( field->capturedConstant ) {
+                        ignoreCapturedConstant = true;
+                    }
+                }
+            }
+            auto cle = convertToCloneExpr(expr,index,decl, ignoreCapturedConstant);
             blk->list.insert(blk->list.begin(), cle); // TODO: fix order. we are making them backwards now
             reportAstChanged();
         }
@@ -9217,6 +9266,10 @@ namespace das {
                     } else if (decl->moveSemantics && decl->value->type->isConst()) {
                         error("can't move from a constant value " + describeType(decl->value->type), "", "",
                             decl->value->at, CompilationError::cant_move);
+                    }
+                    if ( field->privateField && !expr->nativeClassInitializer ) {
+                        error("field " + decl->name + " is private, can't be initialized", "", "",
+                            decl->at, CompilationError::cant_get_field);
                     }
                     if ( !decl->moveSemantics && !field->type->ref ) {
                         decl->value = Expression::autoDereference(decl->value);
@@ -9358,7 +9411,7 @@ namespace das {
                 auto tempCall = make_smart<ExprLooksLikeCall>(expr->at,ctorName);
                 expr->constructor = inferFunctionCall(tempCall.get(),InferCallError::functionOrGeneric, nullptr, false, !expr->ignoreVisCheck).get();
                 if ( !expr->constructor ) {
-                  tempCall->name = "__::" + st->name;
+                  tempCall->name = "_::" + st->name;
                   expr->constructor = inferFunctionCall(tempCall.get(),InferCallError::functionOrGeneric, nullptr, false, !expr->ignoreVisCheck).get();
                 }
                 if ( !expr->constructor ) {

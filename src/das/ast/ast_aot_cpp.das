@@ -46,7 +46,7 @@ def isSequencialMask(fields : dasvector`uint8) {
 
 
 def das_to_cppString(t : Type) {
-    match(t) {
+    match (t) {
         if (Type.anyArgument) { return "vec4f"; }
         if (Type.tVoid) { return "void"; }
         if (Type.tBool) { return "bool"; }
@@ -85,7 +85,7 @@ def das_to_cppString(t : Type) {
 }
 
 def das_to_cppCTypeString(t : Type) {
-    match(t) {
+    match (t) {
         if (Type.autoinfer) { return "autoinfer"; }
         if (Type.alias) { return "alias"; }
         if (Type.anyArgument) { return "anyArgument"; }
@@ -141,7 +141,7 @@ def das_to_cppCTypeString(t : Type) {
 def isConstRedundantForCpp(typeDecl : TypeDeclPtr) {
     if (!empty(typeDecl.dim)) { return false; }
     if (typeDecl.isVectorType) { return true; }
-    match(typeDecl.baseType) {
+    match (typeDecl.baseType) {
         if (Type.tBool) { return true; }
         if (Type.tInt8) { return true; }
         if (Type.tUInt8) { return true; }
@@ -192,7 +192,7 @@ def aotSuffixNameEx(funcName : das_string; suffix : string) {
             } else {
                 prefix = true;
                 var t_ch : string;
-                match(ch) {
+                match (ch) {
                     if ('=') { t_ch = "Equ"; }
                     if ('+') { t_ch = "Add"; }
                     if ('-') { t_ch = "Sub"; }
@@ -630,7 +630,8 @@ class AotDebugInfoHelper {
             } else {
                 write(writer, "nullptr, ")
             }
-            write(writer, "{info.count:d}, {info.size:d}, UINT64_C(0x{info.init_mnh:x}), nullptr, UINT64_C(0x{info.hash:x}), {info.firstGcField:d}")
+            let info_size = cross_platform ? "TypeSize<{helper |> debug_helper_find_struct_cppname(info)}>::size" : "{info.size:d}";
+            write(writer, "{info.count:d}, {info_size}, UINT64_C(0x{info.init_mnh:x}), nullptr, UINT64_C(0x{info.hash:x}), {info.firstGcField:d}")
         }
     }
     def describeCppFuncInfoFields(var writer : StringBuilderWriter?; info : FuncInfo?) {
@@ -748,7 +749,9 @@ class AotDebugInfoHelper {
             write_sep();
             write(writer, "{unsafe(reinterpret<int>(info.flags))}")
             write_sep();
-            write(writer, "{info.size:d}")
+
+            let info_size = cross_platform ? "TypeSize<{helper |> debug_helper_find_type_cppname(info)}>::size" : "{info.size:d}";
+            write(writer, "{info_size}")
             write_sep();
             write(writer, "UINT64_C(0x{info.hash:x})");
         }
@@ -1000,6 +1003,7 @@ class CppAot : AstVisitor {
     program : ProgramPtr;
     collector : BlockVariableCollector ? = new BlockVariableCollector();
     aotPrefix : table<string>;
+    @do_not_delete local_temp_names : table<Expression?; int>;
     @do_not_delete scopes : array<ExprBlock?>;
     prologue : bool = false;
     solidContext : bool = false;
@@ -1217,28 +1221,23 @@ class CppAot : AstVisitor {
     }
 // blk
     def makeLocalTempName(expr : ExpressionPtr) {
-        var stackTop : uint = 0u;
         // todo: fix casts to parents A -> B -> C (from A to B)
+        if (!local_temp_names |> key_exists(expr.get_ptr())) {
+            local_temp_names |> insert(expr.get_ptr(), local_temp_names |> length());
+        }
         /*if (isMakeLocal(expr)) {
             stackTop = (expr as ExprMakeLocal).stackTop;
         }*/
-        if (expr is ExprMakeLocal) {
-            stackTop = (expr as ExprMakeLocal).stackTop;
-        } elif (expr is ExprMakeStruct) {
-            stackTop = (expr as ExprMakeStruct).stackTop;
-        } elif (expr is ExprMakeVariant) {
-            stackTop = (expr as ExprMakeVariant).stackTop;
-        } elif (expr is ExprMakeArray) {
-            stackTop = (expr as ExprMakeArray).stackTop;
-        } elif (expr is ExprMakeTuple) {
-            stackTop = (expr as ExprMakeTuple).stackTop;
-        } elif (expr is ExprCall) {
-            stackTop = (expr as ExprCall).stackTop;
+        if (expr is ExprMakeLocal ||
+            expr is ExprMakeStruct ||
+            expr is ExprMakeVariant ||
+            expr is ExprMakeArray ||
+            expr is ExprMakeTuple ||
+            expr is ExprCall) {
         } else {
             panic("we should not be here. we need stacktop for the name");
-            stackTop = (expr.at.line << 16u) + expr.at.column;
         }
-        return "_temp_make_local_{expr.at.line:d}_{expr.at.column:d}_{stackTop:d}";
+        return "_temp_make_local_{expr.at.line:d}_{expr.at.column:d}_{local_temp_names |> get_value(expr.get_ptr()):d}";
     }
     def override preVisitExprBlock(var blk : smart_ptr<ExprBlock>) {
         push(scopes, blk as ExprBlock);
@@ -1650,7 +1649,7 @@ class CppAot : AstVisitor {
         } else {
             if (that._type.baseType == Type.tBool) {
                 var op = "";
-                match(string(that.op)) {
+                match (string(that.op)) {
                     if ("&") { op = "&&"; }
                     if ("|") { op = "||"; }
                     if ("^" || "^^") { op = "!="; }
@@ -2360,7 +2359,7 @@ class CppAot : AstVisitor {
         }
         write(*ss, " /*");
         for (f in expr.fields) {
-            match(int(f)) {
+            match (int(f)) {
                 if (0) { write(*ss, "x"); }
                 if (1) { write(*ss, "y"); }
                 if (2) { write(*ss, "z"); }
@@ -2701,7 +2700,7 @@ class CppAot : AstVisitor {
                     write(*ss, " = ");
                     let call_func = expr.constructor;
                     if (isHybridCall(call_func)) {
-                        write(*ss, "das_invoke_function<{describeCppType(call_func.result,DescribeConfig(cross_platform=cross_platform))}>::invoke_cmres");
+                        write(*ss, "das_invoke_function<{describeCppType(call_func.result,DescribeConfig(skip_const=true,cross_platform=cross_platform))}>::invoke_cmres");
                         assume mangledName = call_func |> get_mangled_name();
                         let hash = call_func.getMangledNameHash;
                         write(*ss, "(__context__,nullptr,");
@@ -2717,7 +2716,7 @@ class CppAot : AstVisitor {
                     write(*ss, "{tabs()}{mksName(expr)} = ");
                     let call_func = expr.constructor;
                     if (isHybridCall(call_func)) {
-                        write(*ss, "das_invoke_function<{describeCppType(call_func.result, DescribeConfig(cross_platform=cross_platform))}>::invoke_cmres");
+                        write(*ss, "das_invoke_function<{describeCppType(call_func.result, DescribeConfig(skip_const=true,cross_platform=cross_platform))}>::invoke_cmres");
                         assume mangledName = call_func |> get_mangled_name();
                         let hash = call_func.getMangledNameHash;
                         write(*ss, "(__context__,nullptr,");
@@ -2969,7 +2968,7 @@ class CppAot : AstVisitor {
                 write(*ss, "das_invoke /*unknown*/");
             }
             let einv = call as ExprInvoke;
-            write(*ss, "<{describeCppType(call._type,DescribeConfig(cross_platform=cross_platform))}");
+            write(*ss, "<{describeCppType(call._type,DescribeConfig(skip_const=true,cross_platform=cross_platform))}");
             if (methodOffset != -1) {
                 assume argType = call.arguments[0]._type;
                 if (cross_platform) {
@@ -3194,7 +3193,7 @@ class CppAot : AstVisitor {
             }
         } else {
             if (isHybridCall(call.func)) {
-                write(*ss, "das_invoke_function<{describeCppType(call.func.result,DescribeConfig(cross_platform=cross_platform))}>::invoke");
+                write(*ss, "das_invoke_function<{describeCppType(call.func.result,DescribeConfig(skip_const=true,cross_platform=cross_platform))}>::invoke");
                 if (call.func.result.isRefType && !call.func.result.flags.ref) {
                     write(*ss, "_cmres");
                 }

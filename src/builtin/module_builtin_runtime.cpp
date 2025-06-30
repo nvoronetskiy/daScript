@@ -265,6 +265,14 @@ namespace das
         };
     };
 
+    struct UnsafeWhenNotCloneArray : MarkFunctionAnnotation {
+        UnsafeWhenNotCloneArray() : MarkFunctionAnnotation("unsafe_when_not_clone_array") { }
+        virtual bool apply(const FunctionPtr & func, ModuleGroup &, const AnnotationArgumentList &, string &) override {
+            func->unsafeWhenNotCloneArray = true;
+            return true;
+        };
+    };
+
     struct NoAotFunctionAnnotation : MarkFunctionAnnotation {
         NoAotFunctionAnnotation() : MarkFunctionAnnotation("no_aot") { }
         virtual bool apply(const FunctionPtr & func, ModuleGroup &, const AnnotationArgumentList &, string &) override {
@@ -798,6 +806,24 @@ namespace das
     void builtin_table_clear ( Table & arr, Context * context, LineInfoArg * at ) {
         table_clear(*context, arr, at);
     }
+
+    vec4f builtin_table_reserve ( Context & context, SimNode_CallBase * call, vec4f * args ) {
+        // table, size
+        if ( !call->types ) {
+            context.throw_error_at(call->debugInfo, "missing type info");
+        }
+        auto ttype = call->types[0];
+        if ( !ttype->firstType || !ttype->secondType ) {
+            context.throw_error_at(call->debugInfo, "expecting table type");
+        }
+        Type baseType = call->types[0]->firstType->type;
+        uint32_t valueTypeSize = call->types[0]->secondType->size;
+        Table & tab = cast<Table&>::to(args[0]);
+        uint32_t newCapacity = cast<uint32_t>::to(args[1]);
+        table_reserve_impl(context, tab, baseType, newCapacity, valueTypeSize, &call->debugInfo);
+        return v_zero();
+    }
+
 
     struct HashBuilderAnnotation : ManagedStructureAnnotation <HashBuilder,false> {
         HashBuilderAnnotation(ModuleLibrary & ml)
@@ -1583,6 +1609,7 @@ namespace das
         addAnnotation(make_smart<RunAtCompileTimeFunctionAnnotation>());
         addAnnotation(make_smart<UnsafeOpFunctionAnnotation>());
         addAnnotation(make_smart<UnsafeOutsideOfForFunctionAnnotation>());
+        addAnnotation(make_smart<UnsafeWhenNotCloneArray>());
         addAnnotation(make_smart<NoAotFunctionAnnotation>());
         addAnnotation(make_smart<InitFunctionAnnotation>());
         addAnnotation(make_smart<FinalizeFunctionAnnotation>());
@@ -1831,6 +1858,9 @@ namespace das
         addExtern<DAS_BIND_FUN(builtin_table_values)>(*this, lib, "__builtin_table_values",
             SideEffects::modifyArgumentAndExternal, "builtin_table_values")
                 ->args({"iterator","table","stride","context","at"});
+        addInterop<builtin_table_reserve,void,vec4f,uint32_t>(*this, lib, "__builtin_table_reserve",
+            SideEffects::modifyArgumentAndExternal, "builtin_table_reserve")
+                ->args({"table","size"});
         // array and table free
         addExtern<DAS_BIND_FUN(builtin_array_free)>(*this, lib, "__builtin_array_free",
             SideEffects::modifyArgumentAndExternal, "builtin_array_free")
@@ -2057,5 +2087,9 @@ namespace das
         addExtern<DAS_BIND_FUN(das_aot_enabled)>(*this, lib, "aot_enabled",
             SideEffects::none, "das_aot_enabled")
                 ->args({"context","at"});
+        // bitfield
+        addExtern<DAS_BIND_FUN(__bit_set)>(*this, lib, "__bit_set",
+            SideEffects::modifyArgument, "__bit_set")
+                ->args({"value","mask","on"});
     }
 }

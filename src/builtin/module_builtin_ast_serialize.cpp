@@ -442,7 +442,11 @@ namespace das {
           return;
         }
         auto f = funcModule->findFunction(mangledName);
-        func = f ? f.get() : funcModule->findGeneric(mangledName).get();
+        if ( f ) {
+            func = f.get();
+        } else if ( auto genericFn = funcModule->findGeneric(mangledName) ) {
+            func = genericFn.get();
+        }
         if ( func == nullptr && funcModule->wasParsedNameless ) {
             string modname, funcname;
             splitTypeName(mangledName, modname, funcname);
@@ -862,6 +866,7 @@ namespace das {
                 SERIALIZER_VERIFYF(enum_type, "expected to find enumeration '%llu'::'%s'", module, name.c_str());
             } else {
                 serializeSmartPtr(enum_type, smartEnumerationMap);
+                SERIALIZER_VERIFYF(enum_type, "expected to find enumeration");
             }
         }
 
@@ -1980,6 +1985,7 @@ namespace das {
             uint64_t size = 0; ser << size;
             for ( uint64_t i = 0; i < size; i++ ) {
                 VariablePtr g; ser << g;
+                SERIALIZER_VERIFYF(g!=nullptr, "expected to find variable");
                 result.insert(g->name, g);
             }
             globals = das::move(result);
@@ -1996,6 +2002,7 @@ namespace das {
             uint64_t size = 0; ser << size;
             for ( uint64_t i = 0; i < size; i++ ) {
                 StructurePtr g; ser << g;
+                SERIALIZER_VERIFYF(g!=nullptr, "expected to find structure");
                 structures.insert(g->name, g);
             }
         }
@@ -2013,6 +2020,7 @@ namespace das {
             for ( uint64_t i = 0; i < size; i++ ) {
                 string name; ser << name;
                 FunctionPtr g; ser << g;
+                SERIALIZER_VERIFYF(g!=nullptr, "expected to find function");
                 functions.insert(name, g);
             }
         }
@@ -2290,7 +2298,7 @@ namespace das {
     }
 
     uint32_t AstSerializer::getVersion () {
-        static constexpr uint32_t currentVersion = 53;
+        static constexpr uint32_t currentVersion = 56;
         return currentVersion;
     }
 
@@ -2342,7 +2350,7 @@ namespace das {
             for ( auto & m : modules ) {
                 bool builtin = m->builtIn, promoted = m->promoted;
                 ser << builtin << promoted;
-                ser << m->name;
+                ser << m->name << m->fileName;
 
                 if ( m->builtIn && m->promoted ) {
                     bool isNew = ser.writingReadyModules.count(m) == 0;
@@ -2376,36 +2384,38 @@ namespace das {
         uint64_t size = 0; ser << size;
         for ( uint64_t i = 0; i < size; i++ ) {
             bool builtin = false, promoted = false;
-            string name;
-            ser << builtin << promoted << name;
+            string name, fileName;
+            ser << builtin << promoted << name << fileName;
             if ( builtin && !promoted ) {
                 // pass
             } else if ( builtin && promoted ) {
                 bool isNew = false; ser << isNew;
                 if ( isNew ) {
                     Module *prev = Module::require(name);
-                    auto deser = new Module;
-                    deser->setModuleName(name);
+                    auto mod = new Module;
+                    mod->setModuleName(name);
+                    mod->fileName = fileName;
                     if ( prev ) {
                         library.addModule(prev);
-                        ser.serializeModule(*deser, /*already_exists*/true);
-                        deser->builtIn = false; // suppress assert
-                        delete deser;
+                        ser.serializeModule(*mod, /*already_exists*/true);
+                        mod->builtIn = false; // suppress assert
+                        delete mod;
                     } else {
-                        library.addModule(deser);
-                        ser.serializeModule(*deser, /*already_exists*/false);
-                        deser->builtIn = false; // suppress assert
-                        deser->promoteToBuiltin(nullptr);
+                        library.addModule(mod);
+                        ser.serializeModule(*mod, /*already_exists*/false);
+                        mod->builtIn = false; // suppress assert
+                        mod->promoteToBuiltin(nullptr);
                     }
                 } else {
                     Module * m = Module::require(name);
                     library.addModule(m);
                 }
             } else {
-                auto deser = new Module;
-                deser->setModuleName(name);
-                library.addModule(deser);
-                ser << *deser;
+                auto mod = new Module;
+                mod->setModuleName(name);
+                mod->fileName = fileName;
+                library.addModule(mod);
+                ser << *mod;
             }
         }
 

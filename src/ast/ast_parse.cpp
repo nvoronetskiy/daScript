@@ -5,7 +5,7 @@
 #include "daScript/ast/ast_expressions.h"
 #include "daScript/das_common.h"
 #include "daScript/simulate/aot_builtin_string.h"
-#include "daScript/simulate/aot_builtin_fio.h"
+#include "daScript/simulate/aot_builtin_uriparser.h"
 
 #include "../parser/parser_state.h"
 
@@ -250,7 +250,7 @@ namespace das {
                           const FileAccessPtr & access,
                           string &modName,
                           vector<ModuleInfo> & req,
-                          vector<RequireRecord> & missing,
+                          vector<MissingRecord> & missing,
                           vector<RequireRecord> & circular,
                           vector<RequireRecord> & notAllowed,
                           vector<FileInfo *> & chain,
@@ -319,6 +319,13 @@ namespace das {
                                 return false;
                             }
                             if ( !fileModName.empty() ) {
+                                if ( info.moduleName != fileModName ) {
+                                    if ( log ) {
+                                        *log << string(tab,'\t') << "from " << fileName << " require " << mod << " - MODULE INFO NOT FOUND; did you mean '" << fileModName << "'?\n";
+                                    }
+                                    missing.push_back({mod,chain,fileModName});
+                                    return false;
+                                }
                                 info.moduleName = fileModName;
                             } else {
                                 string caseInsensitiveName = info.moduleName;
@@ -328,7 +335,7 @@ namespace das {
                                     namelessReq[caseInsensitiveName] = NamelessModuleReq{info.moduleName, info.fileName};
                                 } else if ( prevMod->second.moduleName != info.moduleName ) {
                                     if ( log ) {
-                                        *log << string(tab,'\t') << "Module name case conflict: " << prevMod->second.moduleName << " vs " << info.moduleName << "\n"
+                                        *log << string(tab,'\t') << "from " << fileName << " require " << mod << " - MODULE NAME CASE CONFLICT; " << prevMod->second.moduleName << " vs " << info.moduleName << "\n"
                                              << string(tab+1,'\t') << prevMod->second.moduleName << " from " << prevMod->second.fileName << "\n"
                                              << string(tab+1,'\t') << info.moduleName << " from " << info.fileName << "\n";
                                     }
@@ -714,7 +721,7 @@ namespace das {
     bool addExtraDependency(
         string modName,
         string modFile,
-        vector<RequireRecord> & missing,
+        vector<MissingRecord> & missing,
         vector<RequireRecord> & circular,
         vector<RequireRecord> & notAllowed,
         vector<ModuleInfo> & req,
@@ -835,7 +842,7 @@ namespace das {
 
     ProgramPtr reportPrerequisitesErrors (
             string fileName,
-            vector<RequireRecord> & missing,
+            vector<MissingRecord> & missing,
             vector<RequireRecord> & circular,
             vector<RequireRecord> & notAllowed,
             vector<ModuleInfo> & req,
@@ -859,21 +866,26 @@ namespace das {
         program->thisModuleGroup = &libGroup;
         TextWriter err;
         for ( auto & mis : missing ) {
-            err << "missing prerequisit " << mis.name << "\n";
+            err << "missing prerequisit '" << mis.name;
+            if ( !mis.hintName.empty() ) {
+                err << "'; did you mean '" << mis.hintName << "'?\n";
+            } else {
+                err << "'\n";
+            }
             reportChain(err, mis.chain);
         }
         for ( auto & mis : circular ) {
-            err << "circular dependency " << mis.name << "\n";
+            err << "circular dependency '" << mis.name << "'\n";
             reportChain(err, mis.chain);
         }
         for ( auto & mis : notAllowed ) {
-            err << "module not allowed " << mis.name << "\n";
+            err << "module not allowed '" << mis.name << "'\n";
             reportChain(err, mis.chain);
         }
         for ( auto & nameless : namelessMismatches ) {
-            err << "Module name case conflict: " << nameless.moduleName << " vs " << nameless.moduleName2 << "\n"
-                << "\t" << nameless.moduleName << " from " << nameless.fileName << "\n"
-                << "\t" << nameless.moduleName2 << " from " << nameless.fileName2 << "\n";
+            err << "module name case conflict: '" << nameless.moduleName << "' vs '" << nameless.moduleName2 << "'\n"
+                << "\t'" << nameless.moduleName << "' from " << nameless.fileName << "\n"
+                << "\t'" << nameless.moduleName2 << "' from " << nameless.fileName2 << "\n";
         }
         program->error(err.str(), "", "", LineInfo(),
                         CompilationError::module_not_found);
@@ -906,6 +918,19 @@ namespace das {
         return true;
     }
 
+    static uint64_t normalizedPathHash(const string &path, const string &base) {
+        auto urlBase = from_file_name(base.c_str());
+        auto urlPath = from_file_name(path.c_str());
+        urlBase.normalize();
+        urlPath.normalize();
+
+        auto urlRelPath = urlPath.removeBaseUri(urlBase);
+        urlRelPath.normalize();
+
+        auto relPath = (urlRelPath.status() != URI_SUCCESS ? urlPath : urlRelPath).toUnixFileName();
+        return hash_blockz64(reinterpret_cast<const uint8_t *>(relPath.c_str()));
+    }
+
     ProgramPtr compileDaScript ( const string & fileName,
                                 const FileAccessPtr & access,
                                 TextWriter & logs,
@@ -920,7 +945,8 @@ namespace das {
         *totM = 0;
         (*daScriptEnvironment::bound)->macroTimeTicks = 0;
         vector<ModuleInfo> req;
-        vector<RequireRecord> missing, circular, notAllowed;
+        vector<MissingRecord> missing;
+        vector<RequireRecord> circular, notAllowed;
         vector<FileInfo *> chain;
         das_set<string> dependencies;
         das_hash_map<string, NamelessModuleReq> namelessReq;
@@ -1028,11 +1054,7 @@ namespace das {
                 logs << "module dependency graph:\n" << tw.str();
             }
             if ( !res->failed() ) {
-                const uint64_t fnv_prime = 1099511628211ul;
-
-                auto relPath = builtin_proximate(fileName.c_str(), getDasRoot().c_str());
-                auto hf = res->getInitSemanticHashWithDep(fnv_prime) ^ hash_blockz64(reinterpret_cast<const uint8_t *>(relPath.c_str()));
-                res->thisNamespace = "_anon_" + to_string(hf);
+                res->thisNamespace = "_anon_" + to_string(normalizedPathHash(fileName, getDasRoot()));
             }
             if ( res->options.getBoolOption("log_total_compile_time",policies.log_total_compile_time) ) {
                 auto totT = get_time_usec(time0);

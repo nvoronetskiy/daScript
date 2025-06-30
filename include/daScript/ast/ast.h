@@ -948,6 +948,8 @@ namespace das
                 bool    hasStringBuilder : 1;
                 bool    recursive : 1;              // this one is detected by the updateKeepAlive during the simulate, if enabled
                 bool    isTemplate : 1;
+
+                bool    unsafeWhenNotCloneArray : 1; // this one is used to mark functions which are unsafe when not cloning arrays
             };
             uint32_t moreFlags = 0;
         };
@@ -1409,6 +1411,9 @@ namespace das
         das_hash_map<string,VarInfo *>           vmn2v;
         das_hash_map<string,FuncInfo *>          fmn2f;
         das_hash_map<string,EnumInfo *>          emn2e;
+
+        das_hash_map<TypeInfo *,string>          t2cppTypeName;
+        das_hash_map<StructInfo *,string>        s2cppTypeName;
     };
 
     struct CodeOfPolicies {
@@ -1704,7 +1709,7 @@ namespace das
                           const FileAccessPtr & access,
                           string &modName,
                           vector<ModuleInfo> & req,
-                          vector<RequireRecord> & missing,
+                          vector<MissingRecord> & missing,
                           vector<RequireRecord> & circular,
                           vector<RequireRecord> & notAllowed,
                           vector<FileInfo *> & chain,
@@ -1759,7 +1764,7 @@ namespace das
         int64_t         macroTimeTicks = 0;
         AstSerializer * serializer_read = nullptr;
         AstSerializer * serializer_write = nullptr;
-        DebugAgentInstance g_threadLocalDebugAgent;
+        inline static DAS_THREAD_LOCAL(DebugAgentInstance *) g_threadLocalDebugAgent;
         uint64_t        dataWalkerStringLimit = 0;
         inline static DAS_THREAD_LOCAL(daScriptEnvironment *) bound;
         inline static DAS_THREAD_LOCAL(daScriptEnvironment *) owned;

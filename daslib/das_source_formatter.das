@@ -750,7 +750,7 @@ def mark_token_context(var ctx : FormatterCtx) {
             let endParams = ctx |> find_pair_paren(pos + 1);
             for (j in range(beginParams, endParams + 1)) {
                 ctx.tokens[j].isInFunctionParam = true;
-                if (j - 1 == beginParams || ctx |> eq(j - 1, ";")) {
+                if (j - 1 == beginParams || ctx |> eq(j - 1, ";") || ctx |> eq(j - 1, ",")) {
                     let colonPos = ctx |> search_token_in_line(j, ":");
                     if (colonPos > 0) {
                         ctx |> mark_tokens_as_type(colonPos + 1);
@@ -1092,6 +1092,11 @@ let space_after_keywords <- fixed_array("if", "elif", "while", "switch", "with",
 def fmt_space_after_keyword(var ctx : FormatterCtx) {
     for (i in range(1, length(ctx.tokens) - 1)) {
         if (space_after_keywords |> find_index(ctx.tokens[i].str) >= 0) {
+            if (!new_line_before(ctx, i + 1)) {
+                ctx |> add_space_before(i + 1)
+            }
+        }
+        if (ctx.tokens[i].spaces >= 2 && ctx.tokens[i].str == "match" && ((ctx.tokens[i + 1].str == "(" && !ctx.tokens[i + 1].isInFunctionParam))) {
             if (!new_line_before(ctx, i + 1)) {
                 ctx |> add_space_before(i + 1)
             }

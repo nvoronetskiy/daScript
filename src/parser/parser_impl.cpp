@@ -49,19 +49,21 @@ namespace das {
 
     vector<ExpressionPtr> sequenceToList ( Expression * arguments ) {
         vector<ExpressionPtr> argList;
+        if (arguments == nullptr) {
+            return argList;
+        }
+
         auto arg = arguments;
-        if ( arg->rtti_isSequence() ) {
-            while ( arg->rtti_isSequence() ) {
-                auto pSeq = static_cast<ExprSequence *>(arg);
-                DAS_ASSERT(!pSeq->right->rtti_isSequence());
-                argList.push_back(pSeq->right);
-                arg = pSeq->left.get();
-            }
-            argList.push_back(arg);
-            reverse(argList.begin(),argList.end());
+        while ( arg->rtti_isSequence() ) {
+            auto pSeq = static_cast<ExprSequence *>(arg);
+            DAS_ASSERT(!pSeq->right->rtti_isSequence());
+            argList.push_back(pSeq->right);
+            arg = pSeq->left.get();
+        }
+        argList.emplace_back(arg);
+        reverse(argList.begin(),argList.end());
+        if (arguments->rtti_isSequence()) {
             delete arguments;
-        } else {
-            argList.push_back(arg);
         }
         return argList;
     }
@@ -296,6 +298,7 @@ namespace das {
             }
             for ( auto pDecl : *list ) {
                 for ( const auto & name_at : *pDecl->pNameList ) {
+                    /*
                     if ( !pStruct->isClass && pDecl->isPrivate ) {
                         das_yyerror(scanner,"only class member can be private "+name_at.name,name_at.at,
                             CompilationError::invalid_private);
@@ -304,6 +307,7 @@ namespace das {
                         das_yyerror(scanner,"only class member can be static "+name_at.name,name_at.at,
                             CompilationError::invalid_static);
                     }
+                    */
                     if ( (pDecl->override || pDecl->sealed) && pDecl->isStatic ) {
                         das_yyerror(scanner,"static member can't be sealed or override "+name_at.name,name_at.at,
                             CompilationError::invalid_static);

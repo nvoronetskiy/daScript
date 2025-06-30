@@ -203,7 +203,7 @@ namespace das {
 
     static bool crossPlatform = false; // It'll be better to forward this flag everywhere in describeTypeEx
 
-    string describeCppTypeEx ( const TypeDeclPtr & type,
+    string describeCppTypeEx ( const smart_ptr_raw<TypeDecl> & type,
                             CpptSubstitureRef substituteRef,
                             CpptSkipRef skipRef,
                             CpptSkipConst skipConst,
@@ -365,7 +365,7 @@ namespace das {
         return stream.str();
     }
 
-    string describeCppType ( const TypeDeclPtr & type,
+    string describeCppType ( const smart_ptr_raw<TypeDecl> & type,
                             CpptSubstitureRef substituteRef,
                             CpptSkipRef skipRef,
                             CpptSkipConst skipConst,
@@ -646,7 +646,15 @@ namespace das {
                 ss << "nullptr, ";
             }
             ss << info->count << ", ";
-            ss << info->size << ", ";
+            if (crossPlatform) {
+                const auto typeName = s2cppTypeName.find(info);
+                DAS_ASSERT(typeName != s2cppTypeName.end());
+                // ss << "[]() constexpr {static_assert(TypeSize<" << typeName->second << ">::size == " << info->size << ", \"Oh no\"); return TypeSize<" << typeName->second << ">::size; }()";
+                ss << "TypeSize<" << typeName->second << ">::size";
+            } else {
+                ss << info->size;
+            }
+            ss << ", ";
             ss << "UINT64_C(0x" << HEX << info->init_mnh << DEC << "), ";
             ss << "nullptr, ";  // annotation list
             ss << "UINT64_C(0x" << HEX << info->hash << DEC << "), ";
@@ -764,7 +772,14 @@ namespace das {
                 ss << "nullptr";
             }
             ss << ", " << info->flags;
-            ss << ", " << info->size;
+            if (crossPlatform) {
+                const auto typeName = t2cppTypeName.find(info);
+                DAS_ASSERT(typeName!=t2cppTypeName.end());
+                // ss << ", []() constexpr {static_assert(TypeSize<" << typeName->second << ">::size == " << info->size << ", \"Oh no\"); return TypeSize<" << typeName->second << ">::size; }()";
+                ss << ", TypeSize<" << typeName->second << ">::size";
+            } else {
+                ss << ", " << info->size;
+            }
             ss << ", UINT64_C(0x" << HEX << info->hash << DEC << ")";
         }
 
@@ -1016,6 +1031,9 @@ namespace das {
         bool                        prologue = false;
         bool                        solidContext = false;
         bool                        cross_platform = true;
+
+        mutable das_map<Expression *,size_t> localTempNames;
+
     protected:
         void newLine () {
             auto nlPos = ss.tellp();
@@ -1245,16 +1263,15 @@ namespace das {
         }
     // block
         string makeLocalTempName ( Expression * expr ) const {
-            uint32_t stackTop = 0;
+            if (localTempNames.count(expr) == 0) {
+                localTempNames[expr] = localTempNames.size();
+            }
             if ( expr->rtti_isMakeLocal() ) {
-                stackTop = ((ExprMakeLocal *)expr)->stackTop;
             } else if ( expr->rtti_isCall() ) {
-                stackTop = ((ExprCall *)expr)->stackTop;
             } else {
                 DAS_ASSERT(0 && "we should not be here. we need stacktop for the name");
-                stackTop = (expr->at.line<<16) + expr->at.column;
             }
-            return "_temp_make_local_" + to_string(expr->at.line) + "_" + to_string(expr->at.column) + "_" + to_string(stackTop);
+            return "_temp_make_local_" + to_string(expr->at.line) + "_" + to_string(expr->at.column) + "_" + to_string(localTempNames.find(expr)->second);
         }
         virtual void preVisit ( ExprBlock * block ) override {
             Visitor::preVisit(block);
@@ -2832,7 +2849,7 @@ namespace das {
                         ss << " = ";
                         auto call_func = expr->constructor;
                         if ( isHybridCall(call_func) ) {
-                            ss << "das_invoke_function<" << describeCppType(call_func->result) << ">::invoke_cmres";
+                            ss << "das_invoke_function<" << describeCppType(call_func->result, CpptSubstitureRef::no, CpptSkipRef::no, CpptSkipConst::yes) << ">::invoke_cmres";
                             auto mangledName = call_func->getMangledName();
                             uint64_t hash = call_func->getMangledNameHash();
                             ss << "(__context__,nullptr,";
@@ -2847,7 +2864,7 @@ namespace das {
                         ss << tabs() << mksName(expr) << " = ";
                         auto call_func = expr->constructor;
                         if ( isHybridCall(call_func) ) {
-                            ss << "das_invoke_function<" << describeCppType(call_func->result) << ">::invoke_cmres";
+                            ss << "das_invoke_function<" << describeCppType(call_func->result, CpptSubstitureRef::no, CpptSkipRef::no, CpptSkipConst::yes) << ">::invoke_cmres";
                             auto mangledName = call_func->getMangledName();
                             uint64_t hash = call_func->getMangledNameHash();
                             ss << "(__context__,nullptr,";
@@ -3106,7 +3123,7 @@ namespace das {
                 else if (bt == Type::tString) ss << "das_invoke_function_by_name";
                 else ss << "das_invoke /*unknown*/";
                 ExprInvoke * einv = static_cast<ExprInvoke *>(call);
-                ss << "<" << describeCppType(call->type);
+                ss << "<" << describeCppType(call->type, CpptSubstitureRef::no, CpptSkipRef::no, CpptSkipConst::yes);
                 if ( methodName ) {
                     if (crossPlatform) {
                         ss << ",offsetof(" << describeCppType(argType->argTypes.at(0),
@@ -3332,7 +3349,7 @@ namespace das {
                 }
             } else {
                 if ( isHybridCall(call->func) ) {
-                    ss << "das_invoke_function<" << describeCppType(call->func->result) << ">::invoke";
+                    ss << "das_invoke_function<" << describeCppType(call->func->result, CpptSubstitureRef::no, CpptSkipRef::no, CpptSkipConst::yes) << ">::invoke";
                     if ( call->func->result->isRefType() && !call->func->result->ref ) {
                         ss << "_cmres";
                     }

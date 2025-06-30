@@ -2623,6 +2623,9 @@ global_variable_declaration_list
     :   {
         $$ = new vector<VariableDeclaration*>();
     }
+    |   global_variable_declaration_list[list] SEMICOLON {
+        $$ = $list;
+    }
     |   global_variable_declaration_list[list] {
         if ( !yyextra->g_CommentReaders.empty() ) {
             auto tak = tokAt(scanner,@list);
@@ -3478,7 +3481,7 @@ make_variant_dim
     ;
 
 make_struct_single
-    :   make_struct_fields[msf] {
+    :   make_struct_fields[msf] optional_comma {
         auto msd = new ExprMakeStruct();
         msd->structs.push_back(MakeStructPtr($msf));
         $$ = msd;
