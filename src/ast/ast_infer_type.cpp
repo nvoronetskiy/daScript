@@ -3458,10 +3458,17 @@ namespace das {
                         }
                         if ( valueType ) {
                             bool allOtherInferred = true;   // we check, if all other arguments inferred
-                            for ( size_t i=2; i!=expr->arguments.size(); ++i ) {
-                                if ( !expr->arguments[i]->type ) {
-                                    allOtherInferred = false;
-                                    break;
+                            if ( !value->type || value->type->isAliasOrExpr() ) {
+                                allOtherInferred = false;
+                            } else {
+                                for ( size_t i=2; i!=expr->arguments.size(); ++i ) {
+                                    if ( !expr->arguments[i]->type ) {
+                                        allOtherInferred = false;
+                                        break;
+                                    } else if ( expr->arguments[i]->type->isAliasOrExpr() ) {
+                                        allOtherInferred = false;
+                                        break;
+                                    }
                                 }
                             }
                             if ( allOtherInferred ) {
@@ -3926,6 +3933,29 @@ namespace das {
                         return make_smart<ExprConstInt>(expr->at, expr->typeexpr->dim[0]);
                     } else {
                         error("typeinfo(dim non_array) is prohibited, " + describeType(expr->typeexpr), "", "",
+                              expr->at,CompilationError::typeinfo_dim);
+                    }
+                } else if ( expr->trait=="dim_table_value" ) {
+                    if ( !expr->typeexpr->isGoodTableType() ) {
+                        error("typeinfo(dim_table_value " + describeType(expr->typeexpr) + ") is not a table type", "", "",
+                            expr->at, CompilationError::type_not_found);
+                        return Visitor::visit(expr);
+                    }
+                    if ( !expr->typeexpr->secondType ) {
+                        error("typeinfo(dim_table_value " + describeType(expr->typeexpr) + ") is not a table type with value", "", "",
+                            expr->at, CompilationError::type_not_found);
+                        return Visitor::visit(expr);
+                    }
+                    if ( expr->typeexpr->secondType->isExprTypeAnywhere() ) {
+                        error("typeinfo(dim_table_value " + describeType(expr->typeexpr->secondType) + ") is not fully inferred, expecting resolved dim",  "", "",
+                            expr->at, CompilationError::type_not_found);
+                        return Visitor::visit(expr);
+                    }
+                    if ( expr->typeexpr->secondType->dim.size() ) {
+                        reportAstChanged();
+                        return make_smart<ExprConstInt>(expr->at, expr->typeexpr->secondType->dim[0]);
+                    } else {
+                        error("typeinfo(dim_table_value table<...,non_array>) is prohibited, " + describeType(expr->typeexpr), "", "",
                               expr->at,CompilationError::typeinfo_dim);
                     }
                 } else if ( expr->trait=="is_any_vector" ) {
@@ -6614,6 +6644,9 @@ namespace das {
             }
             if ( !expr->left->type || !expr->right->type ) {
                 return Visitor::visit(expr);
+            }
+            if ( expr->left->type->isAliasOrExpr() || expr->right->type->isAliasOrExpr() ) {
+                return Visitor::visit(expr);    // failed to infer
             }
             // lets infer clone call (and instance generic if need be)
             auto opName = "_::clone";
