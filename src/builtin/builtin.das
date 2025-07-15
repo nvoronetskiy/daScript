@@ -465,7 +465,7 @@ def push_clone(var A : auto(CT) -# -const; b : auto(TT) | #) {
         concept_assert(false, "can't push_clone type which can't be cloned")
     } static_elif (!typeinfo can_be_placed_in_container(type<TT -#>)) {
         concept_assert(false, "can't push_clone type which can't be placed in a container")
-    } static_elif (!typeinfo builtin_function_exists(@@ < (var a : CT - # - const; var b : TT - # - const) : void > _::emplace)) {
+    } static_elif (!typeinfo builtin_function_exists(@@ < (var a : CT -# -const; var b : TT -# -const) : void > _::emplace)) {
         concept_assert(false, "can't push_clone, missing emplace({typeinfo typename(type<CT -# -const>)},{typeinfo typename(type<TT -# -const>)})")
     } else {
         unsafe {
@@ -1060,6 +1060,24 @@ def clone(var clone_src : auto(TT) ==const | #) : TT -const -# {
 }
 
 [skip_lock_check]
+def clone(clone_src : auto(TT)[] ==const | #) : TT[typeinfo dim(clone_src)] -const -# {
+    unsafe {
+        var clone_dest : TT[typeinfo dim(clone_src)] -#
+        clone_dest := clone_src
+        return <- clone_dest
+    }
+}
+
+[skip_lock_check]
+def clone(var clone_src : auto(TT)[] ==const | #) : TT[typeinfo dim(clone_src)] -const -# {
+    unsafe {
+        var clone_dest : TT[typeinfo dim(clone_src)] -#
+        clone_dest := clone_src
+        return <- clone_dest
+    }
+}
+
+[skip_lock_check]
 def clone_to_move(clone_src : auto(TT) ==const | #) : TT -const -# {
     unsafe {
         var clone_dest : TT -#
@@ -1187,6 +1205,33 @@ def clone(var args; var nargs : array<string>) {
         args[i] := nargs[i]
     }
     // delete nargs // we can make this unsafe_when_not_clone_array, or just let GC deal with it
+}
+
+[expect_any_vector(args), skip_lock_check]
+def clone(var args; var nargs : array<int>) {
+    let tot = _::length(nargs)
+    _::resize(args, tot)
+    for (i in range(tot)) {
+        args[i] := nargs[i]
+    }
+}
+
+[expect_any_vector(args), skip_lock_check]
+def clone(var args; var nargs : array<uint8>) {
+    let tot = _::length(nargs)
+    _::resize(args, tot)
+    for (i in range(tot)) {
+        args[i] := nargs[i]
+    }
+}
+
+[expect_any_vector(args), skip_lock_check]
+def clone(var args; var nargs : array<tuple<uint; uint>>) {
+    let tot = _::length(nargs)
+    _::resize(args, tot)
+    for (i in range(tot)) {
+        args[i] := nargs[i]
+    }
 }
 
 [expect_any_vector(args), skip_lock_check, unsafe_when_not_clone_array]

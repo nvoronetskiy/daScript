@@ -2090,6 +2090,14 @@ namespace das {
                       decl.at, CompilationError::cant_infer_missing_initializer );
             }
         }
+        bool hasSafeWhenUninitialized ( const AnnotationArgumentList & args ) const {
+            for ( auto & ann : args ) {
+                if ( ann.name=="safe_when_uninitialized" ) {
+                    return true;
+                }
+            }
+            return false;
+        }
         virtual void visitStructureField ( Structure * st, Structure::FieldDeclaration & decl, bool ) override {
             if ( decl.init ) st->hasInitFields = true;
             if ( decl.type && decl.type->isExprType() ) {
@@ -2154,14 +2162,7 @@ namespace das {
             }
 
             if ( noUnsafeUninitializedStructs && !st->isLambda && !decl.init && decl.type->unsafeInit() ) {
-                bool safeWhenUninitialized = false;
-                for ( auto & ann : decl.annotation ) {
-                    if ( ann.name=="safe_when_uninitialized" ) {
-                        safeWhenUninitialized = true;
-                        break;
-                    }
-                }
-                if ( !safeWhenUninitialized ) {
+                if ( !hasSafeWhenUninitialized(decl.annotation) ) {
                     error("Uninitialized field " + decl.name + " is unsafe. Use initializer syntax or @safe_when_uninitialized when intended.", "", "",
                         decl.at, CompilationError::unsafe);
                 }
@@ -2263,6 +2264,12 @@ namespace das {
     // globals
         virtual void preVisitGlobalLet ( const VariablePtr & var ) override {
             Visitor::preVisitGlobalLet(var);
+            if ( noUnsafeUninitializedStructs && !var->init && var->type->unsafeInit() ) {
+                if ( !hasSafeWhenUninitialized(var->annotation) ) {
+                    error("Uninitialized variable " + var->name + " is unsafe. Use initializer syntax or @safe_when_uninitialized when intended.", "", "",
+                        var->at, CompilationError::unsafe);
+                }
+            }
             if ( checkNoGlobalVariablesAtAll && !var->generated ) {
                 error("global variables are disabled by option no_global_variables_at_all", "", "",
                       var->at, CompilationError::no_global_variables );
@@ -3057,7 +3064,11 @@ namespace das {
             expr->type->firstType = make_smart<TypeDecl>(Type::tHandle);
             expr->type->firstType->annotation = (TypeAnnotation *) Module::require("ast")->findAnnotation("Expression").get();
             // mark quote as noAot
-            if ( func  ) func->noAot = true;
+            if ( func  ) {
+                if (!program->policies.aot_macros) {
+                    func->noAot = true;
+                }
+            }
             return Visitor::visit(expr);
         }
     // ExprDebug
@@ -3475,6 +3486,10 @@ namespace das {
                                 // we build _::{field.name} ( field, arg1, arg2, ... )
                                 auto callName = "_::" + methodName;
                                 auto newCall = make_smart<ExprCall>(expr->at, callName);
+                                newCall->alwaysSafe = expr->alwaysSafe;
+                                if ( value->rtti_isR2V() ) {
+                                    value = static_pointer_cast<ExprRef2Value>(value)->subexpr;
+                                }
                                 newCall->arguments.push_back(value);
                                 for ( size_t i=2; i!=expr->arguments.size(); ++i ) {
                                     newCall->arguments.push_back(expr->arguments[i]);
@@ -6716,6 +6731,9 @@ namespace das {
                     if ( verifyCloneFunc(fnList, expr->at) ) {
                         if ( fnList.size()==0 ) {
                             auto clf = makeClone(stt);
+                            if ( relaxedPointerConst ) {
+                                clf->arguments[1]->type->constant = true; // we clone from const, regardless
+                            }
                             clf->privateFunction = true;
                             extraFunctions.push_back(clf);
                         }
@@ -6808,6 +6826,7 @@ namespace das {
                         if ( !resType->ref && resType->isWorkhorseType() && !resType->isPointer() ) {
                             resType->constant = true;
                         }
+                        resType->sanitize();
                         reportAstChanged();
                         return true;
                     }
@@ -8888,7 +8907,18 @@ namespace das {
             if ( !expr->func ) return false;
             if ( expr->arguments.size() != 2 ) return false;
             if ( !(expr->func->name=="clone" || (expr->func->fromGeneric && expr->func->fromGeneric->name=="clone"))  ) return false;
-            if ( !expr->arguments[1]->rtti_isCall() ) return false;
+            if ( !expr->arguments[1]->rtti_isCall() ) {
+                if ( expr->arguments[1]->rtti_isMakeStruct() ) {
+                    auto mks = static_cast<ExprMakeStruct *>(expr->arguments[1].get());
+                    if ( mks->structs.size() ==0 ) {
+                        return true; // its default<array<T>>
+                    } else {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+            }
             auto call = (ExprCall *)(expr->arguments[1].get());
             if ( !call->func ) return false;
             if ( !call->func->fromGeneric ) return false;
