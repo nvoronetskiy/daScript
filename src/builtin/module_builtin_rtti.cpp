@@ -221,7 +221,8 @@ namespace das {
         auto ft = make_smart<TypeDecl>(Type::tBitfield);
         ft->alias = "ModuleFlags";
         ft->argNames = {
-            "builtIn", "promoted", "isPublic", "isModule", "isSolidContext", "doNotAllowUnsafe"
+            "builtIn", "promoted", "isPublic", "isModule", "isSolidContext", "doNotAllowUnsafe",
+            "wasParsedNameless", "visibleEverywhere"
         };
         return ft;
     }
@@ -645,7 +646,8 @@ namespace das {
         TypeInfoAnnotation(ModuleLibrary & ml) : ManagedTypeInfoAnnotation ("TypeInfo", ml) {
             addField<DAS_BIND_MANAGED_FIELD(type)>("_type","type");
             addField<DAS_BIND_MANAGED_FIELD(dim)>("dim");
-            addField<DAS_BIND_MANAGED_FIELD(annotation_or_name)>("annotation_or_name");
+            // addField<DAS_BIND_MANAGED_FIELD(annotation_or_name)>("annotation_or_name");
+            addProperty<DAS_BIND_MANAGED_PROP(getAnnotation)>("annotation_or_name", "getAnnotation");
         }
     };
 
