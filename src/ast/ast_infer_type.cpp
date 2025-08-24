@@ -312,12 +312,20 @@ namespace das {
                         error("tuple element can't be a reference: '" + describeType(argType) + "'", "", "",
                               argType->at,CompilationError::invalid_type);
                     }
+                    if ( argType->isVoid() ) {
+                        error("tuple element can't be void", "", "",
+                              argType->at,CompilationError::invalid_type);
+                    }
                     verifyType(argType);
                 }
             } else if ( decl->baseType==Type::tVariant ) {
                 for ( auto & argType : decl->argTypes ) {
                     if ( argType->ref ) {
                         error("variant element can't be a reference: '" + describeType(argType) + "'", "", "",
+                              argType->at,CompilationError::invalid_type);
+                    }
+                    if ( argType->isVoid() ) {
+                        error("variant element can't be void", "", "",
                               argType->at,CompilationError::invalid_type);
                     }
                     verifyType(argType);
@@ -2234,7 +2242,8 @@ namespace das {
                 if ( fromGeneric ) {
                     ctor->fromGeneric = getOrCreateDummy(var->module);
                 }
-                ctor->exports = alwaysExportInitializer;
+                bool export_for_aot = !var->cppLayout && (*daScriptEnvironment::bound && (*daScriptEnvironment::bound)->g_isInAot);
+                ctor->exports = alwaysExportInitializer || export_for_aot;
                 extraFunctions.push_back(ctor);
                 reportAstChanged();
                 return true;
@@ -2704,6 +2713,20 @@ namespace das {
     // ExprRef2Value
         virtual ExpressionPtr visit ( ExprRef2Value * expr ) override {
             if ( !expr->subexpr->type ) return Visitor::visit(expr);
+            // infer r2v(type<Foo...>)
+            if ( expr->subexpr->rtti_isTypeDecl() ) {
+                if ( expr->subexpr->type->isWorkhorseType() ) {
+                    reportAstChanged();
+                    auto ewsType = make_smart<TypeDecl>(*(expr->subexpr->type));
+                    ewsType->ref = false;
+                    auto ews = Program::makeConst(expr->at, ewsType, v_zero());
+                    ews->type = ewsType;
+                    return ews;
+                } else {
+                    error("can't dereference a type<" + describeType(expr->subexpr->type) + ">",  "", "",
+                        expr->at, CompilationError::invalid_type);
+                }
+            }
             // infer
             if ( !expr->subexpr->type->isRef() ) {
                 if ( expr->subexpr->rtti_isConstant() ) {
@@ -3021,6 +3044,40 @@ namespace das {
                 error("static assert comment must be string constant",  "", "",
                     expr->at, CompilationError::invalid_argument_type);
             }
+
+            // check if we can give more info this early (buy only if we are already reporting errors)
+            if ( verbose && expr->arguments[0]->rtti_isConstant() ) {
+                bool pass = ((ExprConstBool *)(expr->arguments[0].get()))->getValue();
+                if ( !pass ) {
+                    bool iscf = expr->name=="concept_assert";
+                    string message;
+                    if ( expr->arguments.size()==2 && expr->arguments[1]->rtti_isConstant() ) {
+                        message = ((ExprConstString *)(expr->arguments[1].get()))->getValue();
+                        if ( message.empty() ) {
+                            message = iscf ? "concept assert failed" : "static assert failed";
+                        }
+                    } else {
+                        message = iscf ? "static assert failed" : "concept failed";
+                    }
+                    if ( iscf ) {
+                        LineInfo atC = expr->at;
+                        string extra;
+                        if ( func ) {
+                            extra = "\nconcept_assert at " + expr->at.describe();
+                            extra += func->getLocationExtra();
+                            atC = func->getConceptLocation(atC);
+                        }
+                        program->error(message, extra,"",atC, CompilationError::concept_failed);
+                    } else {
+                        string extra;
+                        if ( func ) {
+                            extra = func->getLocationExtra();
+                        }
+                        program->error(message, extra,"",expr->at, CompilationError::static_assert_failed);
+                    }
+                }
+            }
+
             expr->type = make_smart<TypeDecl>(Type::tVoid);
             return Visitor::visit(expr);
         }
@@ -4905,7 +4962,8 @@ namespace das {
                     }
                 }
                 else {
-                    if ( expr->typeexpr->baseType==Type::tStructure && !expr->typeexpr->structType->hasAnyInitializers() ) {
+                    if ( expr->typeexpr->baseType==Type::tStructure &&
+                         !expr->typeexpr->structType->hasAnyInitializers() && expr->arguments.empty() ) {
                         expr->initializer = false;
                         reportAstChanged();
                     }
@@ -7236,7 +7294,11 @@ namespace das {
                 }
                 return;
             }
-            assume.push_back(expr);
+        }
+
+        virtual ExpressionPtr visit ( ExprAssume * expr ) override {
+            assume.emplace_back(expr);
+            return expr;
         }
     // ExprWith
         virtual void preVisit ( ExprWith * expr ) override {
@@ -9117,6 +9179,10 @@ namespace das {
     // StringBuilder
         virtual ExpressionPtr visitStringBuilderElement ( ExprStringBuilder *, Expression * expr, bool ) override {
             auto res = Expression::autoDereference(expr);
+            if (expr->type && expr->type->isVoid()) {
+                error("argument of format string should not be `void`", "", "",
+                    expr->at, CompilationError::expecting_return_value);
+            }
             if ( expr->constexpression ) {
                 return evalAndFoldString(res.get());
             } else {
@@ -9876,6 +9942,7 @@ namespace das {
                 expr->makeType = mkt;
             } else {
                 expr->makeType = make_smart<TypeDecl>(Type::tTuple);
+                expr->makeType->at = expr->at;
                 for ( auto & val : expr->values ) {
                     auto valT = make_smart<TypeDecl>(*val->type);
                     valT->ref = false;
