@@ -543,6 +543,7 @@ namespace das {
         program->needMacroModule = false;
         program->policies = policies;
         program->thisModuleGroup = &libGroup;
+        program->thisModule->fileName = fileName;
         program->thisModuleName = program->thisModule->name;
         libGroup.foreach([&](Module * pm){
             program->library.addModule(pm);
@@ -636,6 +637,9 @@ namespace das {
             if ( !program->failed() ) {
                 program->buildAccessFlags(logs);    // this is used by the lint pass
                 if ( program->patchAnnotations() ) {
+                    program->thisModule->functions.foreach([&](auto && fn) {
+                        fn->notInferred();
+                    });
                     goto restartInfer;
                 }
             }

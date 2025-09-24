@@ -52,6 +52,7 @@ namespace das {
     class InferTypes : public FoldingVisitor {
     public:
         InferTypes( const ProgramPtr & prog ) : FoldingVisitor(prog ) {
+            debugInferFlag = prog->options.getBoolOption("debug_infer_flag", prog->policies.debug_infer_flag);
             enableInferTimeFolding = prog->options.getBoolOption("infer_time_folding",true);
             disableAot = prog->options.getBoolOption("no_aot",false);
             multiContext = prog->options.getBoolOption("multiple_contexts", prog->policies.multiple_contexts);
@@ -59,7 +60,7 @@ namespace das {
             checkNoGlobalVariablesAtAll = prog->options.getBoolOption("no_global_variables_at_all", prog->policies.no_global_variables_at_all);
             strictSmartPointers = prog->options.getBoolOption("strict_smart_pointers", prog->policies.strict_smart_pointers);
             disableInit = prog->options.getBoolOption("no_init", prog->policies.no_init);
-            skipModuleLockChecks = prog->options.getBoolOption("skip_module_lock_checks", false);
+            prog->thisModule->skipLockCheck = prog->options.getBoolOption("skip_module_lock_checks", false);
             strictUnsafeDelete = prog->options.getBoolOption("strict_unsafe_delete", prog->policies.strict_unsafe_delete);
             reportInvisibleFunctions = prog->options.getBoolOption("report_invisible_functions", prog->policies.report_invisible_functions);
             reportPrivateFunctions = prog->options.getBoolOption("report_private_functions", prog->policies.report_private_functions);
@@ -102,7 +103,6 @@ namespace das {
         bool                    checkNoGlobalVariablesAtAll = false;
         bool                    strictSmartPointers = false;
         bool                    disableInit = false;
-        bool                    skipModuleLockChecks = false;
         bool                    strictUnsafeDelete = false;
         bool                    reportInvisibleFunctions = false;
         bool                    reportPrivateFunctions = false;
@@ -112,7 +112,9 @@ namespace das {
         bool                    relaxedAssign = false;
         bool                    relaxedPointerConst = false;
         bool                    unsafeTableLookup = false;
+        bool                    debugInferFlag = false;
         Module *                thisModule = nullptr;
+        size_t                  beforeFunctionErrors = 0;
     public:
         vector<FunctionPtr>     extraFunctions;
     protected:
@@ -148,10 +150,12 @@ namespace das {
         }
         void reportAstChanged() {
             needRestart = true;
+            if ( func ) func->notInferred();
         }
         virtual void reportFolding() override {
             FoldingVisitor::reportFolding();
             needRestart = true;
+            if ( func ) func->notInferred();
         }
         string describeType ( const TypeDeclPtr & decl ) const {
             return verbose ? decl->describe() : "";
@@ -331,6 +335,10 @@ namespace das {
                     verifyType(argType);
                 }
             }
+        }
+
+        bool jitEnabled() const {
+            return program->policies.jit && (!func || !func->requestNoJit);
         }
 
         void propagateTempType ( const TypeDeclPtr & parentType, TypeDeclPtr & subexprType ) {
@@ -1295,7 +1303,7 @@ namespace das {
                 if ( itFnList ) {
                     auto & goodFunctions = itFnList->second;
                     for ( auto & pFn : goodFunctions ) {
-                        if ( pFn->jitOnly && !program->policies.jit ) continue;
+                        if ( pFn->jitOnly && !jitEnabled() ) continue;
                         if ( pFn->isTemplate ) continue;
                         if ( !visCheck || isVisibleFunc(inWhichModule,getFunctionVisModule(pFn) ) ) {
                             if ( !pFn->fromGeneric || thisModule->isVisibleDirectly(mod) ) {
@@ -1355,7 +1363,7 @@ namespace das {
                     if ( itFnList ) {
                         auto & goodFunctions = itFnList->second;
                         for ( auto & pFn : goodFunctions ) {
-                            if ( pFn->jitOnly && !program->policies.jit ) continue;
+                            if ( pFn->jitOnly && !jitEnabled() ) continue;
                             if ( pFn->isTemplate ) continue;
                             if ( isVisibleFunc(inWhichModule,getFunctionVisModule(pFn)) ) {
                                 if ( canCallPrivate(pFn,inWhichModule,thisModule) ) {
@@ -1383,7 +1391,7 @@ namespace das {
                     if ( itFnList ) {
                         auto & goodFunctions = itFnList->second;
                         for ( auto & pFn : goodFunctions ) {
-                            if ( pFn->jitOnly && !program->policies.jit ) continue;
+                            if ( pFn->jitOnly && !jitEnabled() ) continue;
                             if ( pFn->isTemplate ) continue;
                             if ( !visCheck || isVisibleFunc(inWhichModule,getFunctionVisModule(pFn) ) ) {
                                 if ( !pFn->fromGeneric || thisModule->isVisibleDirectly(mod) ) {
@@ -2424,7 +2432,12 @@ namespace das {
             return false;
         }
         virtual bool canVisitFunction ( Function * fun ) override {
-            return !fun->isTemplate;    // we don't do a thing with templates
+            if ( debugInferFlag ) {
+                return !fun->isTemplate;         // we don't do a thing with templates
+            } else {
+                return !fun->isTemplate             // we don't do a thing with templates
+                    && !(fun->isFullyInferred);     // and if its fully inferred - we do nada as well
+            }
         }
         virtual void preVisit ( Function * f ) override {
             Visitor::preVisit(f);
@@ -2432,6 +2445,8 @@ namespace das {
             unsafeDepth = 0;
             func = f;
             func->hasReturn = false;
+            func->isFullyInferred = true;
+            beforeFunctionErrors = program->errors.size();
             if ( !standaloneContext ) {
                 func->noAot |= disableAot;
             }
@@ -2551,7 +2566,26 @@ namespace das {
                 func->copyOnReturn = false;
                 func->moveOnReturn = false;
             }
-            // if any of this asserts failed, there is logic error in how we pop
+            // if there were errors, we are not fully inferred
+            if ( beforeFunctionErrors != program->errors.size() ) {
+                func->notInferred();
+            }
+            // now, for some debugging
+            if ( debugInferFlag ) {
+                if ( func->isFullyInferred ) {
+                    TextWriter srcCode;
+                    srcCode << *func;
+                    if ( !func->inferredSource.empty() ) {
+                        if ( func->inferredSource != srcCode.c_str() ) {
+                            program->error("fully inferred function has changed\nbefore:\n" + func->inferredSource + "\nafter:\n" + srcCode.c_str(),
+                                "", "", func->at, CompilationError::unspecified );
+                        }
+                    } else {
+                        func->inferredSource = srcCode.c_str();
+                    }
+                }
+            }
+            // if any of this asserts failed, we have a logic error in how we pop
             DAS_ASSERT(loop.size()==0);
             DAS_ASSERT(scopes.size()==0);
             DAS_ASSERT(blocks.size()==0);
@@ -2681,6 +2715,16 @@ namespace das {
                     }
                 }
             }
+            scopes.back()->hasExitByLabel = true;
+            for ( const auto & scp : scopes.back()->list ) {
+                if ( scp->rtti_isLabel() ) {
+                    auto lab = static_pointer_cast<ExprLabel>(scp);
+                    if ( lab->label == expr->label ) {
+                        scopes.back()->hasExitByLabel = false;
+                        break;
+                    }
+                }
+            }
             if ( !expr->subexpr && !findLabel(expr->label) ) {
                 error("can't find label " + to_string(expr->label),  "", "",
                     expr->at, CompilationError::invalid_label);
@@ -2715,16 +2759,18 @@ namespace das {
             if ( !expr->subexpr->type ) return Visitor::visit(expr);
             // infer r2v(type<Foo...>)
             if ( expr->subexpr->rtti_isTypeDecl() ) {
+                reportAstChanged();
                 if ( expr->subexpr->type->isWorkhorseType() ) {
-                    reportAstChanged();
                     auto ewsType = make_smart<TypeDecl>(*(expr->subexpr->type));
                     ewsType->ref = false;
                     auto ews = Program::makeConst(expr->at, ewsType, v_zero());
                     ews->type = ewsType;
                     return ews;
                 } else {
-                    error("can't dereference a type<" + describeType(expr->subexpr->type) + ">",  "", "",
-                        expr->at, CompilationError::invalid_type);
+                    auto mks = make_smart<ExprMakeStruct>(expr->at);
+                    mks->makeType = expr->subexpr->type;
+                    mks->useInitializer = false;
+                    return mks;
                 }
             }
             // infer
@@ -3029,7 +3075,10 @@ namespace das {
             }
         }
         virtual ExpressionPtr visit ( ExprStaticAssert * expr ) override {
-            if ( expr->argumentsFailedToInfer ) return Visitor::visit(expr);
+            if ( expr->argumentsFailedToInfer ) {
+                if ( func ) func->notInferred();
+                return Visitor::visit(expr);
+            }
             if ( expr->arguments.size()<1 || expr->arguments.size()>2  ) {
                 error("static_assert(expr) or static_assert(expr,string)",  "", "",
                     expr->at, CompilationError::invalid_argument_count);
@@ -3089,7 +3138,10 @@ namespace das {
             }
         }
         virtual ExpressionPtr visit ( ExprAssert * expr ) override {
-            if ( expr->argumentsFailedToInfer ) return Visitor::visit(expr);
+            if ( expr->argumentsFailedToInfer ) {
+                if ( func ) func->notInferred();
+                return Visitor::visit(expr);
+            }
             if ( expr->arguments.size()<1 || expr->arguments.size()>2  ) {
                 error("assert(expr) or assert(expr,string)",  "", "",
                     expr->at, CompilationError::invalid_argument_count);
@@ -3130,7 +3182,10 @@ namespace das {
         }
     // ExprDebug
         virtual ExpressionPtr visit ( ExprDebug * expr ) override {
-            if ( expr->argumentsFailedToInfer ) return Visitor::visit(expr);
+            if ( expr->argumentsFailedToInfer ) {
+                if ( func ) func->notInferred();
+                return Visitor::visit(expr);
+            }
             if ( expr->arguments.size()<1 || expr->arguments.size()>2 ) {
                 error("debug(expr) or debug(expr,string)",  "", "",
                     expr->at, CompilationError::invalid_argument_count);
@@ -3146,7 +3201,10 @@ namespace das {
         }
     // ExprMemZero
         virtual ExpressionPtr visit ( ExprMemZero * expr ) override {
-            if ( expr->argumentsFailedToInfer ) return Visitor::visit(expr);
+            if ( expr->argumentsFailedToInfer ) {
+                if ( func ) func->notInferred();
+                return Visitor::visit(expr);
+            }
             if ( expr->arguments.size()!=1 ) {
                 error("memzero(ref expr)",  "", "",
                     expr->at, CompilationError::invalid_argument_count);
@@ -3258,6 +3316,7 @@ namespace das {
                                     auto jitFlags = (func && func->requestJit) ? generator_jit : 0;
                                     if ( func && func->requestNoJit ) jitFlags |= generator_nojit;
                                     auto pFn = generateLambdaFunction(lname, block.get(), ls, cl.capt, expr->capture, generator_needYield | jitFlags, program);
+                                    if ( func && func->skipLockCheck ) pFn->skipLockCheck = true;   // we propagate skipLockCheck to the generator function
                                     if ( program->addFunction(pFn) ) {
                                         auto pFnFin = generateLambdaFinalizer(lname, block.get(), ls);
                                         if ( program->addFunction(pFnFin) ) {
@@ -3388,6 +3447,7 @@ namespace das {
                                 auto jitFlags = (func && func->requestJit) ? generator_jit : 0;
                                 if ( func && func->requestNoJit ) jitFlags |= generator_nojit;
                                 auto pFn = generateLambdaFunction(lname, block.get(), ls, cl.capt, expr->capture, jitFlags, program);
+                                if ( func && func->skipLockCheck ) pFn->skipLockCheck = true; // we propagate skipLockCheck to the lambda function
                                 if ( program->addFunction(pFn) ) {
                                     auto pFnFin = generateLambdaFinalizer(lname, block.get(), ls);
                                     if ( program->addFunction(pFnFin) ) {
@@ -3483,6 +3543,31 @@ namespace das {
             }
             return Visitor::visit(expr);
         }
+    // find call macro
+        ExprLooksLikeCall * makeCallMacro ( const LineInfo & at, const string & funcName ) {
+            vector<ExprCallFactory *> ptr;
+            Module * currentModule = thisModule;
+            if ( func && func->fromGeneric ) {
+                currentModule = func->getOrigin()->module;
+            }
+            program->library.foreach([&](Module * pm) -> bool {
+                if ( currentModule->isVisibleDirectly(pm) ) {
+                    if ( auto pp = pm->findCall(funcName) ) {
+                        ptr.push_back(pp);
+                    }
+                }
+                return true;
+            }, "*");
+            if ( ptr.size()==1 ) {
+                return (*ptr.back())(at);
+            } else if ( ptr.size()>1 ) {
+                error("ambiguous call macro " + funcName,  "", "",
+                    at, CompilationError::function_not_found);
+                return nullptr;
+            } else {
+                return nullptr;
+            }
+        }
     // ExprInvoke
         virtual ExpressionPtr visit ( ExprInvoke * expr ) override {
             if ( expr->argumentsFailedToInfer ) {
@@ -3556,6 +3641,14 @@ namespace das {
                                     reportAstChanged();
                                     return newCall;
                                 }
+                            }
+                            if ( auto mcall = makeCallMacro(expr->at, methodName) ) {
+                                mcall->arguments.push_back(value);
+                                for ( size_t i=2; i!=expr->arguments.size(); ++i ) {
+                                    mcall->arguments.push_back(expr->arguments[i]);
+                                }
+                                reportAstChanged();
+                                return mcall;
                             }
                         }
                     }
@@ -3746,7 +3839,10 @@ namespace das {
 
     // ExprSetInsert
         virtual ExpressionPtr visit ( ExprSetInsert * expr ) override {
-            if ( expr->argumentsFailedToInfer ) return Visitor::visit(expr);
+            if ( expr->argumentsFailedToInfer ) {
+                if ( func ) func->notInferred();
+                return Visitor::visit(expr);
+            }
             if ( expr->arguments.size()!=2 ) {
                 error("insert(table,key)",  "", "",
                     expr->at, CompilationError::invalid_argument_count);
@@ -3770,7 +3866,10 @@ namespace das {
         }
     // ExprErase
         virtual ExpressionPtr visit ( ExprErase * expr ) override {
-            if ( expr->argumentsFailedToInfer ) return Visitor::visit(expr);
+            if ( expr->argumentsFailedToInfer ) {
+                if ( func ) func->notInferred();
+                return Visitor::visit(expr);
+            }
             if ( expr->arguments.size()!=2 ) {
                 error("eraseKey(table,key)",  "", "",
                     expr->at, CompilationError::invalid_argument_count);
@@ -3794,7 +3893,10 @@ namespace das {
         }
     // ExprFind
         virtual ExpressionPtr visit ( ExprFind * expr ) override {
-            if ( expr->argumentsFailedToInfer ) return Visitor::visit(expr);
+            if ( expr->argumentsFailedToInfer ) {
+                if ( func ) func->notInferred();
+                return Visitor::visit(expr);
+            }
             if ( expr->arguments.size()!=2 ) {
                 error("findKey(table,key)",  "", "",
                     expr->at, CompilationError::invalid_argument_count);
@@ -3820,7 +3922,10 @@ namespace das {
         }
     // ExprKeyExists
         virtual ExpressionPtr visit ( ExprKeyExists * expr ) override {
-            if ( expr->argumentsFailedToInfer ) return Visitor::visit(expr);
+            if ( expr->argumentsFailedToInfer ) {
+                if ( func ) func->notInferred();
+                return Visitor::visit(expr);
+            }
             if ( expr->arguments.size()!=2 ) {
                 error("keyExists(table,key)",  "", "",
                     expr->at, CompilationError::invalid_argument_count);
@@ -3918,6 +4023,18 @@ namespace das {
     }
 
     // ExprTypeInfo
+        bool skipLockCheck() const {
+            if ( program->thisModule->skipLockCheck ) return true;                  // if this module has options skip_lock_check - we skip
+            if ( func ) {
+                if ( func->skipLockCheck ) return true;                             // if this function is [skip_lock_check] - we skip
+                if ( func->module->skipLockCheck ) return true;                     // if this function is from the module, with options skip_lock_check - we skip
+                if ( auto fromGeneric = func->getOriginPtr() ) {
+                    if ( fromGeneric->skipLockCheck ) return true;                  // if this function is from generic function, with options skip_lock_check - we skip
+                    if ( fromGeneric->module->skipLockCheck ) return true;          // if this function is from generic function, from the module, with options skip_lock_check - we skip
+                }
+            }
+            return false;
+        }
         virtual ExpressionPtr visit ( ExprTypeInfo * expr ) override {
             expr->macro = nullptr;
             if ( expr->typeexpr && expr->typeexpr->isExprType() ) {
@@ -4275,7 +4392,7 @@ namespace das {
                     return make_smart<ExprConstBool>(expr->at, expr->typeexpr->hasNonTrivialCopy());
                 } else if ( expr->trait=="need_lock_check" ) {
                     reportAstChanged();
-                    return make_smart<ExprConstBool>(expr->at,((func && func->skipLockCheck) || skipModuleLockChecks) ? false : expr->typeexpr->lockCheck());
+                    return make_smart<ExprConstBool>(expr->at,skipLockCheck() ? false : expr->typeexpr->lockCheck());
                 } else if ( expr->trait=="has_field" || expr->trait=="safe_has_field" ) {
                     auto etype = expr->typeexpr;
                     if ( etype->isPointer() && etype->firstType ) etype = etype->firstType;
@@ -4571,6 +4688,8 @@ namespace das {
                             if ( !program->addFunction(fnDel) ) {
                                 reportMissingFinalizer("finalizer mismatch ", expr->at, expr->subexpr->type);
                                 return Visitor::visit(expr);
+                            } else {
+                                reportAstChanged();
                             }
                         } else if ( ptrf.size() > 1 ) {
                             string candidates = verbose ? program->describeCandidates(ptrf) : "";
@@ -4708,6 +4827,9 @@ namespace das {
             auto funT = make_smart<TypeDecl>(*seTF);
             auto cresT = cTF->firstType;
             auto resT = funT->firstType;
+            if (resT == nullptr) {
+                return nullptr;
+            }
             if ( !cresT->isSameType(*resT,RefMatters::yes, ConstMatters::no, TemporaryMatters::no) ) {
                 if ( resT->isStructure() || (resT->isPointer() && resT->firstType && resT->firstType->isStructure()) ) {
                     auto tryRes = castStruct(at, resT, cresT, upcast);
@@ -4874,7 +4996,10 @@ namespace das {
             return Visitor::visitNewArg(call, arg, last);
         }
         virtual ExpressionPtr visit ( ExprNew * expr ) override {
-            if ( expr->argumentsFailedToInfer ) return Visitor::visit(expr);
+            if ( expr->argumentsFailedToInfer ) {
+                if ( func ) func->notInferred();
+                return Visitor::visit(expr);
+            }
             if ( !expr->typeexpr ) {
                 error("new type did not infer", "", "",
                     expr->at, CompilationError::type_not_found);
@@ -5010,7 +5135,7 @@ namespace das {
                     return Visitor::visit(expr);
                 }
                 if ( seT->secondType && seT->secondType->lockCheck() ) {
-                    if ( !(expr->at.fileInfo && expr->at.fileInfo->name=="builtin.das") && !(func && func->skipLockCheck) && !skipModuleLockChecks ) {
+                    if ( !(expr->at.fileInfo && expr->at.fileInfo->name=="builtin.das") && !skipLockCheck() ) { // we always skip at lockchecks in builtin
                         reportAstChanged(); // we promote tab[index] into _at_with_lockcheck(tab,index)
                         auto pCall = make_smart<ExprCall>(expr->at, "_at_with_lockcheck");
                         pCall->arguments.push_back(expr->subexpr->clone());
@@ -5619,7 +5744,7 @@ namespace das {
     // ExprField
         bool verifyPrivateFieldLookup ( ExprField * expr ) {
             // lets verify private field lookup
-            if ( expr->field && expr->field->privateField ) {
+            if ( expr->field() && expr->field()->privateField ) {
                 bool canLookup = false;
                 if ( func && func->isClassMethod ) {
                     TypeDecl selfT(func->classParent);
@@ -5760,8 +5885,8 @@ namespace das {
                         expr->at, CompilationError::cant_get_field);
                     return Visitor::visit(expr);
                 } else if ( valT->firstType->isStructure() ) {
-                    expr->field = valT->firstType->structType->findField(expr->name);
-                    if ( !expr->field && valT->firstType->structType->hasStaticMembers ) {
+                    expr->fieldRef = valT->firstType->structType->findFieldRef(expr->name);
+                    if ( !expr->fieldRef && valT->firstType->structType->hasStaticMembers ) {
                         auto fname = valT->firstType->structType->name + "`" + expr->name;
                         if ( auto pVar = valT->firstType->structType->module->findVariable(fname) ) {
                             if ( pVar->static_class_member ) {
@@ -5815,8 +5940,8 @@ namespace das {
                     expr->annotation = valT->annotation;
                     expr->type = expr->annotation->makeFieldType(expr->name, valT->constant);
                 } else if ( valT->isStructure() ) {
-                    expr->field = valT->structType->findField(expr->name);
-                    if ( !expr->field && valT->structType->hasStaticMembers ) {
+                    expr->fieldRef = valT->structType->findFieldRef(expr->name);
+                    if ( !expr->fieldRef && valT->structType->hasStaticMembers ) {
                         auto fname = valT->structType->name + "`" + expr->name;
                         if ( auto pVar = valT->structType->module->findVariable(fname) ) {
                             if ( pVar->static_class_member ) {
@@ -5857,15 +5982,20 @@ namespace das {
                 return Visitor::visit(expr);
             }
             // handle
-            if ( expr->field ) {
-                TypeDecl::clone(expr->type,expr->field->type);
+            if ( expr->fieldRef ) {
+                if ( expr->fieldRef->type->isAliasOrExpr() ) {
+                    error("undefined field type '" + describeType(expr->fieldRef->type) + "'",
+                        reportInferAliasErrors(expr->fieldRef->type), "", expr->at, CompilationError::type_not_found);
+                    return Visitor::visit(expr);
+                }
+                TypeDecl::clone(expr->type,expr->fieldRef->type);
                 expr->type->ref = true;
                 expr->type->constant |= valT->constant;
                 if ( valT->isPointer() && valT->firstType ) {
                     expr->type->constant |= valT->firstType->constant;
                 }
                 if ( !expr->ignoreCaptureConst ) {
-                    expr->type->constant |= expr->field->capturedConstant;
+                    expr->type->constant |= expr->fieldRef->capturedConstant;
                 }
             } else if ( expr->fieldIndex!=-1 ) {
                 if ( valT->isBitfield() ) {
@@ -5947,13 +6077,17 @@ namespace das {
                 auto safeAs = make_smart<ExprSafeAsVariant>(expr->at, expr->value, expr->name);
                 return safeAs;
             } else if ( valT->firstType->structType ) {
-                expr->field = valT->firstType->structType->findField(expr->name);
-                if ( !expr->field ) {
+                expr->fieldRef = valT->firstType->structType->findFieldRef(expr->name);
+                if ( !expr->fieldRef ) {
                     error("can't safe get field '" + expr->name + "'", "", "",
                         expr->at, CompilationError::cant_get_field);
                     return Visitor::visit(expr);
+                } else if ( expr->fieldRef->type->isAliasOrExpr() ) {
+                    error("undefined safe field type '" + describeType(expr->fieldRef->type) + "'",
+                        reportInferAliasErrors(expr->fieldRef->type), "", expr->at, CompilationError::type_not_found);
+                    return Visitor::visit(expr);
                 }
-                TypeDecl::clone(expr->type,expr->field->type);
+                TypeDecl::clone(expr->type,expr->fieldRef->type);
             } else if ( valT->firstType->isHandle() ) {
                 expr->annotation = valT->firstType->annotation;
                 expr->type = expr->annotation->makeSafeFieldType(expr->name, valT->constant);
@@ -6592,7 +6726,7 @@ namespace das {
                 error("moving classes requires unsafe"+moveErrorInfo(expr), "", "",
                     expr->at, CompilationError::unsafe);
             } else if ( expr->left->type->lockCheck() || expr->right->type->lockCheck()) {
-                if ( !expr->skipLockCheck && !(expr->at.fileInfo && expr->at.fileInfo->name=="builtin.das") && !(func && func->skipLockCheck) && !skipModuleLockChecks ) {
+                if ( !expr->skipLockCheck && !(expr->at.fileInfo && expr->at.fileInfo->name=="builtin.das") && !skipLockCheck() ) { // we always skip lock check in builtin.das
                     reportAstChanged();
                     auto pCall = make_smart<ExprCall>(expr->at,"_move_with_lockcheck");
                     pCall->arguments.push_back(expr->left->clone());
@@ -6852,7 +6986,7 @@ namespace das {
         }
     // ExprTryCatch
         ExpressionPtr visit ( ExprTryCatch * expr ) override {
-            if ( program->policies.jit ) {
+            if ( jitEnabled() ) {
                 auto tryBlock = make_smart<ExprMakeBlock>(expr->try_block->at,expr->try_block);
                 ((ExprBlock *)tryBlock->block.get())->returnType = make_smart<TypeDecl>(Type::autoinfer);
                 auto catchBlock = make_smart<ExprMakeBlock>(expr->catch_block->at,expr->catch_block);
@@ -7027,8 +7161,8 @@ namespace das {
                 }
             }
             if ( expr->moveSemantics && expr->subexpr && expr->subexpr->type && expr->subexpr->type->lockCheck() ) {
-                if ( !(expr->at.fileInfo && expr->at.fileInfo->name=="builtin.das") ) {
-                    if ( !expr->skipLockCheck && !(func && func->skipLockCheck) && !skipModuleLockChecks ) {
+                if ( !(expr->at.fileInfo && expr->at.fileInfo->name=="builtin.das") ) { // we always skip lock check in builtin.das
+                    if ( !expr->skipLockCheck && !skipLockCheck() ) {
                         bool checkIt = true;
                         if ( expr->subexpr->rtti_isCall() ) {
                             auto ccall = static_pointer_cast<ExprCall>(expr->subexpr);
@@ -7491,7 +7625,7 @@ namespace das {
             markNoDiscard(that);
         }
         virtual ExpressionPtr visitForSource ( ExprFor * expr, Expression * that , bool last ) override {
-            if ( program->policies.jit & that->type && (
+            if ( jitEnabled() & that->type && (
                     (that->type->isHandle() && that->type->annotation->isIterable()) ||
                     (that->type->isString())
              )) {
@@ -7914,6 +8048,7 @@ namespace das {
                     auto lname = stype->name;
                     auto newFinalizer = generateStructureFinalizer(stype);
                     finFunc->body = newFinalizer->body;
+                    finFunc->notInferred();
                 }
                 // ---
                 reportAstChanged();
@@ -8164,7 +8299,10 @@ namespace das {
             }
         }
         virtual ExpressionPtr visit ( ExprNamedCall * expr ) override {
-            if ( expr->argumentsFailedToInfer ) return Visitor::visit(expr);
+            if ( expr->argumentsFailedToInfer ) {
+                if ( func ) func->notInferred();
+                return Visitor::visit(expr);
+            }
 
             vector<TypeDeclPtr> nonNamedTypes;
             if (!inferArguments(nonNamedTypes, expr->nonNamedArguments)) {
@@ -8645,6 +8783,7 @@ namespace das {
         FunctionPtr inferFunctionCall ( ExprLooksLikeCall * expr, InferCallError cerr=InferCallError::functionOrGeneric, Function * lookupFunction = nullptr, bool failOnMissingCtor = true, bool visCheck = true ) {
             vector<TypeDeclPtr> types;
             if (!inferArguments(types, expr->arguments)) {
+                if ( func ) func->notInferred();
                 return nullptr;
             }
             MatchingFunctions functions, generics;
@@ -9012,7 +9151,10 @@ namespace das {
         }
 
         virtual ExpressionPtr visit ( ExprCall * expr ) override {
-            if (expr->argumentsFailedToInfer) return Visitor::visit(expr);
+            if ( expr->argumentsFailedToInfer ) {
+                if ( func ) func->notInferred();
+                return Visitor::visit(expr);
+            }
             expr->func = inferFunctionCall(expr, InferCallError::functionOrGeneric, expr->genericFunction ? expr->func : nullptr).get();
             if ( expr->func && expr->func->fromGeneric ) expr->genericFunction = true;
             if ( expr->aliasSubstitution  ) {
@@ -9179,9 +9321,14 @@ namespace das {
     // StringBuilder
         virtual ExpressionPtr visitStringBuilderElement ( ExprStringBuilder *, Expression * expr, bool ) override {
             auto res = Expression::autoDereference(expr);
-            if (expr->type && expr->type->isVoid()) {
-                error("argument of format string should not be `void`", "", "",
-                    expr->at, CompilationError::expecting_return_value);
+            if (expr->type) {
+                if ( expr->type->isVoid() ) {
+                    error("argument of format string should not be `void`", "", "",
+                        expr->at, CompilationError::expecting_return_value);
+                } else if ( expr->type->isAutoOrAlias() ) {
+                    error("argument of format string can't be `auto` or alias", "", "",
+                        expr->at, CompilationError::invalid_type);
+                }
             }
             if ( expr->constexpression ) {
                 return evalAndFoldString(res.get());
@@ -10240,10 +10387,10 @@ namespace das {
         bool anyMacrosDidWork = false;
         bool anyMacrosFailedToInfer = false;
         int pass = 0;
-        int  maxPasses = options.getIntOption("max_infer_passes", policies.max_infer_passes);
+        int32_t maxInferPasses = options.getIntOption("max_infer_passes", policies.max_infer_passes);
         if ( failed() ) goto failed_to_infer;
         do {
-            if ( pass++ >= maxPasses ) goto failed_to_infer;
+            if ( pass++ >= maxInferPasses ) goto failed_to_infer;
             anyMacrosDidWork = false;
             anyMacrosFailedToInfer = false;
             auto modMacro = [&](Module * mod) -> bool {    // we run all macros for each module
@@ -10291,26 +10438,26 @@ namespace das {
             inferTypesDirty(logs, true);
             reportingInferErrors = false;
         }
-        if ( pass >= maxPasses ) {
-            error("type inference exceeded maximum allowed number of passes ("+to_string(maxPasses)+")\n"
+        if ( pass >= maxInferPasses ) {
+            error("type inference exceeded maximum allowed number of passes ("+to_string(maxInferPasses)+")\n"
                     "this is likely due to a macro continuesly beeing applied", "", "",
                 LineInfo(), CompilationError::too_many_infer_passes);
         }
     }
 
     void Program::inferTypesDirty(TextWriter & logs, bool verbose) {
-        const bool log = options.getBoolOption("log_infer_passes",false);
         int pass = 0;
-        int  maxPasses = options.getIntOption("max_infer_passes", policies.max_infer_passes);
-        if ( log ) {
+        int32_t maxInferPasses = options.getIntOption("max_infer_passes", policies.max_infer_passes);
+        bool logInferPasses = options.getBoolOption("log_infer_passes",false);
+        if ( logInferPasses ) {
             logs << "INITIAL CODE:\n" << *this;
         }
-        for ( pass = 0; pass < maxPasses; ++pass ) {
+        for ( pass = 0; pass < maxInferPasses; ++pass ) {
             if ( macroException ) break;
             failToCompile = false;
             errors.clear();
             InferTypes context(this);
-            context.verbose = verbose || log;
+            context.verbose = verbose || logInferPasses;
             visit(context);
             for ( auto efn : context.extraFunctions ) {
                 addFunction(efn);
@@ -10321,6 +10468,7 @@ namespace das {
                 if ( hash != mnh ) {
                     refreshFunctions.emplace_back(make_tuple(fn.get(), hash, mnh));
                     fn->lookup.clear();
+                    fn->notInferred();
                 }
             });
             for ( auto rfn : refreshFunctions ) {
@@ -10340,7 +10488,8 @@ namespace das {
             };
             Module::foreach(modMacro);
             library.foreach(modMacro, "*");
-            if ( log ) {
+            inferLint(logs);
+            if ( logInferPasses ) {
                 logs << "PASS " << pass << ":\n" << *this;
                 sort(errors.begin(), errors.end());
                 for (auto & err : errors) {
@@ -10351,8 +10500,8 @@ namespace das {
             if ( context.finished() ) break;
         }
     failedIt:;
-        if (pass == maxPasses) {
-            error("type inference exceeded maximum allowed number of passes ("+to_string(maxPasses)+")\n"
+        if (pass == maxInferPasses) {
+            error("type inference exceeded maximum allowed number of passes ("+to_string(maxInferPasses)+")\n"
                     "this is likely due to a loop in the type system", "", "",
                 LineInfo(), CompilationError::too_many_infer_passes);
         }

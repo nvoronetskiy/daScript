@@ -601,7 +601,7 @@ set(AotDaslibList
         ../daslib/random.das
         ../daslib/math_boost.das
 
-        ../src/das/ast/printer_flags_visitor.das
+        # ../src/das/ast/printer_flags_visitor.das
 )
 SET(AOT_GENERATED_SRC)
 FOREACH(inF IN LISTS AotDaslibList)
@@ -609,10 +609,11 @@ FOREACH(inF IN LISTS AotDaslibList)
 ENDFOREACH()
 
 set(StandaloneFilesList
-        ../src/das/ast/ast_print.das
-        ../src/das/ast/ast_aot_cpp.das
-        ../src/das/ast/aot_constants.das
-        ../src/das/ast/standalone_contexts.das
+    # # aot das-mode temporary disabled
+    # src/das/ast/ast_print.das
+    # src/das/ast/ast_aot_cpp.das
+    # src/das/ast/aot_constants.das
+    # src/das/ast/standalone_contexts.das
 )
 
 FOREACH(inF IN LISTS StandaloneFilesList)

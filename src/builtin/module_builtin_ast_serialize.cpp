@@ -117,7 +117,7 @@ namespace das {
                 throw_formatted_error("too many candidates for structure '%s'", name.c_str());
             }
         // set the missing field field
-            *field = struct_.front()->findField(fieldname);
+            *field = struct_.front()->findFieldRef(fieldname);
         }
         fieldRefs.clear();
     }
@@ -1400,8 +1400,7 @@ namespace das {
             if ( !has_field ) return;
             Module * module = nullptr; ser << module;
             string mangledName; ser << mangledName;
-            field = ( Structure::FieldDeclaration * ) 1;
-            ser.fieldRefs.emplace_back(&field, module, das::move(mangledName), name);
+            ser.fieldRefs.emplace_back(&fieldRef, module, das::move(mangledName), name);
         }
     }
 
@@ -2151,12 +2150,14 @@ namespace das {
         // This is like so because of several fields with strings
         *this << value.aot
               << value.aot_module
+              << value.aot_macros
               << value.completion
               << value.export_all
+              << value.serialize_main_module
               << value.keep_alive
               << value.very_safe_context
-              << value.always_report_candidates_threshold
               << value.max_infer_passes
+              << value.verify_infer_types
               << value.stack
               << value.intern_strings
               << value.persistent_heap
@@ -2166,6 +2167,9 @@ namespace das {
               << value.solid_context
               << value.macro_context_persistent_heap
               << value.macro_context_collect
+              << value.max_static_variables_size
+              << value.max_heap_allocated
+              << value.max_string_heap_allocated
               << value.rtti
               << value.unsafe_table_lookup
               << value.relaxed_pointer_const
@@ -2195,15 +2199,19 @@ namespace das {
               << value.no_local_class_members
               << value.no_unsafe_uninitialized_structures
               << value.strict_properties
+              << value.no_writing_to_nameless
+              << value.always_call_super
               << value.no_optimizations
               << value.fail_on_no_aot
               << value.fail_on_lack_of_aot_export
               << value.no_fast_call
+              << value.scoped_stack_allocator
               << value.debugger
               << value.debug_module
               << value.profiler
               << value.profile_module
               << value.jit
+              << value.jit_module
               << value.threadlock_context;
         return *this;
     }
@@ -2298,7 +2306,7 @@ namespace das {
     }
 
     uint32_t AstSerializer::getVersion () {
-        static constexpr uint32_t currentVersion = 56;
+        static constexpr uint32_t currentVersion = 60;
         return currentVersion;
     }
 

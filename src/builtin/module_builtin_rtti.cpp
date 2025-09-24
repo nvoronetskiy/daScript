@@ -222,7 +222,7 @@ namespace das {
         ft->alias = "ModuleFlags";
         ft->argNames = {
             "builtIn", "promoted", "isPublic", "isModule", "isSolidContext", "doNotAllowUnsafe",
-            "wasParsedNameless", "visibleEverywhere"
+            "wasParsedNameless", "visibleEverywhere", "skipLockCheck"
         };
         return ft;
     }
@@ -780,6 +780,7 @@ namespace das {
             addField<DAS_BIND_MANAGED_FIELD(no_fast_call)>("no_fast_call");
         // debugger
             addField<DAS_BIND_MANAGED_FIELD(debugger)>("debugger");
+            addField<DAS_BIND_MANAGED_FIELD(debug_infer_flag)>("debug_infer_flag");
             addField<DAS_BIND_MANAGED_FIELD(debug_module)>("debug_module");
         // profiler
             addField<DAS_BIND_MANAGED_FIELD(profiler)>("profiler");
@@ -792,6 +793,24 @@ namespace das {
         }
         virtual bool isLocal() const override { return true; }
     };
+
+    vector<pair<string,Type>> getCodeOfPolicyOptions() {
+        vector<pair<string,Type>> options;
+        Module dummyMod;
+        ModuleLibrary dummy(&dummyMod);
+        auto cop = make_smart<CodeOfPoliciesAnnotation>(dummy);
+        for ( auto & f : cop->fields ) {
+            if ( f.second.decl->isWorkhorseType() ) {
+                auto bT = f.second.decl->baseType;
+                switch ( bT ) {
+                    case Type::tUInt:   bT = Type::tInt; break;
+                    default: break;
+                }
+                options.push_back({f.first,bT});
+            }
+        }
+        return options;
+    }
 
 
     struct DebugInfoHelperAnnotation : ManagedStructureAnnotation<DebugInfoHelper> {

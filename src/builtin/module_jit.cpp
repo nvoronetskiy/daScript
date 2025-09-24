@@ -274,10 +274,10 @@ extern "C" {
         context->to_out(at, tw.str().c_str());
     }
 
-    void jit_initialize_fileinfo ( void * dummy ) {
+    void jit_initialize_fileinfo ( void * dummy, const char *filename ) {
         new (dummy) FileInfo();
         auto fileInfoPtr = reinterpret_cast<FileInfo*>(dummy);
-        fileInfoPtr->name = "jit_generated_fileinfo";
+        fileInfoPtr->name = filename;
     }
 
     void * jit_ast_typedecl ( uint64_t hash, Context * context, LineInfoArg * at ) {
@@ -333,7 +333,7 @@ extern "C" {
     }
 
     void * das_get_jit_table_at ( int32_t baseType, Context * context, LineInfoArg * at ) {
-        JIT_TABLE_FUNCTION(jit_table_at);
+        JIT_TABLE_FUNCTION(&jit_table_at);
     }
 
     template <typename KeyType>
@@ -345,7 +345,7 @@ extern "C" {
     }
 
     void * das_get_jit_table_erase ( int32_t baseType, Context * context, LineInfoArg * at ) {
-        JIT_TABLE_FUNCTION(jit_table_erase);
+        JIT_TABLE_FUNCTION(&jit_table_erase);
     }
 
     template <typename KeyType>
@@ -356,7 +356,7 @@ extern "C" {
     }
 
     void * das_get_jit_table_find ( int32_t baseType, Context * context, LineInfoArg * at ) {
-        JIT_TABLE_FUNCTION(jit_table_find);
+        JIT_TABLE_FUNCTION(&jit_table_find);
     }
 
     void * das_get_jit_new ( TypeDeclPtr htype, Context * context, LineInfoArg * at ) {

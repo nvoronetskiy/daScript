@@ -359,6 +359,13 @@ namespace das
         return that;
     }
 
+    void SimNode_ForWithIteratorBase::closeIterators ( Iterator ** sources, char ** pi, Context & context ) {
+        for ( int t=int(totalSources)-1; t>=0; --t ) {
+            sources[t]->close(context, pi[t]);
+        }
+
+    }
+
     vec4f SimNode_ForWithIteratorBase::eval ( Context & context ) {
         // note: this is the 'slow' version, to which we fall back when there are too many sources
         DAS_PROFILE_NODE
@@ -394,9 +401,7 @@ namespace das
         }
     loopend:
         evalFinal(context);
-        for ( int t=0; t!=totalCount; ++t ) {
-            sources[t]->close(context, pi[t]);
-        }
+        closeIterators(sources.data(), pi.data(), context);
         context.stopFlags &= ~EvalFlags::stopForBreak;
         return v_zero();
     }
@@ -439,9 +444,7 @@ namespace das
         }
     loopend:
         evalFinal(context);
-        for ( int t=0; t!=totalCount; ++t ) {
-            sources[t]->close(context, pi[t]);
-        }
+        closeIterators(sources.data(), pi.data(), context);
         context.stopFlags &= ~EvalFlags::stopForBreak;
         return v_zero();
     }
@@ -486,9 +489,7 @@ namespace das
         }
     loopend:
         this->evalFinal(context);
-        for ( int t=0; t!=totalCount; ++t ) {
-            sources[t]->close(context, pi[t]);
-        }
+        closeIterators(sources.data(), pi.data(), context);
         context.stopFlags &= ~EvalFlags::stopForBreak;
         return v_zero();
     }
@@ -989,9 +990,9 @@ namespace das
             stringHeap = make_smart<LinearStringAllocator>();
         }
         heap->setInitialSize ( options.getIntOption("heap_size_hint", policies.heap_size_hint) );
-        heap->setLimit ( options.getUInt64Option("heap_size_limit", policies.max_heap_allocated) );
+        heap->setLimit ( options.getUInt64OptionEx("heap_size_limit", "max_heap_allocated", policies.max_heap_allocated) );
         stringHeap->setInitialSize ( options.getIntOption("string_heap_size_hint", policies.string_heap_size_hint) );
-        stringHeap->setLimit ( options.getUInt64Option("string_heap_size_limit", policies.max_string_heap_allocated) );
+        stringHeap->setLimit ( options.getUInt64OptionEx("string_heap_size_limit", "max_string_heap_allocated", policies.max_string_heap_allocated) );
         constStringHeap = make_shared<ConstStringAllocator>();
         totalVariables = totalVars;
         if ( globalStringHeapSize ) {

@@ -38,6 +38,15 @@ namespace das {
 
     AotListBase * AotListBase::head = nullptr;
 
+    SimNode* AotFactory::operator()(Context& ctx) const
+    {
+        if (is_cmres) {
+            return ctx.code->makeNode<SimNode_AotCMRES>(fn, wrappedFn);
+        } else {
+            return ctx.code->makeNode<SimNode_Aot>(fn, wrappedFn);
+        }
+    }
+
     AotListBase::AotListBase( RegisterAotFunctions prfn ) {
         tail = head;
         head = this;
@@ -370,6 +379,18 @@ namespace das {
             align = das::max ( fd.type->getAlignOf(), align );
         }
         return align;
+    }
+
+    Structure::FieldDeclarationRef Structure::findFieldRef ( const string & fieldName ) const {
+        auto pField = findField(fieldName);
+        if ( pField ) {
+            FieldDeclarationRef ref;
+            ref.owner = const_cast<Structure *>(this);
+            ref.index = int32_t(pField - &fields[0]);
+            return ref;
+        } else {
+            return FieldDeclarationRef{};
+        }
     }
 
     const Structure::FieldDeclaration * Structure::findField ( const string & na ) const {
@@ -1797,6 +1818,10 @@ namespace das {
         return vis.visit(this);
     }
 
+    Structure::FieldDeclaration * ExprField::field() const {
+        return fieldRef.get();
+    }
+
     ExpressionPtr ExprField::clone( const ExpressionPtr & expr ) const {
         auto cexpr = clonePtr<ExprField>(expr);
         Expression::clone(cexpr);
@@ -1804,7 +1829,7 @@ namespace das {
         if ( value) {
             cexpr->value = value->clone();
         }
-        cexpr->field = field;
+        cexpr->fieldRef = fieldRef;
         cexpr->fieldIndex = fieldIndex;
         cexpr->unsafeDeref = unsafeDeref;
         cexpr->ignoreCaptureConst = ignoreCaptureConst;
@@ -3236,7 +3261,12 @@ namespace das {
     }
 
     bool Program::getOptimize() const {
-        return !policies.no_optimizations && options.getBoolOption("optimize",true);
+        if ( policies.no_optimizations ) return false;
+        auto arg = options.find("optimize",Type::tBool);
+        if ( arg ) return arg->bValue;
+        arg = options.find("no_optimization",Type::tBool);
+        if ( arg ) return !arg->bValue;
+        return true;
     }
 
     bool Program::getDebugger() const {

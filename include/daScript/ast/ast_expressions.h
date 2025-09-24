@@ -211,6 +211,7 @@ namespace das
                 bool            hasMakeBlock : 1;           // if this block has make block inside
                 bool            hasEarlyOut : 1;            // this block has return, or other blocks with return
                 bool            forLoop : 1;                // this block is a for loop
+                bool            hasExitByLabel : 1;         // whether we have goto outside of block
             };
             uint32_t            blockFlags = 0;
         };
@@ -280,10 +281,11 @@ namespace das
         virtual bool rtti_isField() const override { return true; }
         virtual void serialize( AstSerializer & ser ) override;
         virtual void markNoDiscard() override;
+        Structure::FieldDeclaration * field() const;
         ExpressionPtr   value;
         string          name;
         LineInfo        atField;
-        const Structure::FieldDeclaration * field = nullptr;
+        Structure::FieldDeclarationRef fieldRef;
         int             fieldIndex = -1;
         TypeAnnotationPtr annotation;
         union {

@@ -1,7 +1,6 @@
 #pragma once
 
 #include "daScript/simulate/data_walker.h"
-#include "daScript/simulate/heap.h"
 #include "daScript/simulate/runtime_string.h"
 #include "daScript/simulate/simulate.h"
 
@@ -416,7 +415,7 @@ namespace das {
             ss << "]]";
         }
         virtual void WalkBlock ( struct Block * pa ) override {
-            ss << "block 0x" << HEX << intptr_t(pa->body) << DEC;
+            ss << "block" << HEX << getSemanticHash(pa->body, context) << DEC;
         }
         virtual void WalkEnumeration ( int32_t & value, EnumInfo * info ) override {
             for ( uint32_t t=0, ts=info->count; t!=ts; ++t ) {
